@@ -64,6 +64,11 @@ npm start        # Run compiled server
 npm test         # Run test suite (vitest)
 ```
 
+## API curl Reference
+
+For detailed curl examples covering all 50 endpoints, see [docs/api-instructions.md](docs/api-instructions.md).
+When asked to perform an API call against lg-api, consult that document for the exact curl syntax, headers, and request body format.
+
 ## API Endpoints (50 total)
 
 ### Assistants (11)
