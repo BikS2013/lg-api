@@ -12,6 +12,7 @@ import type {
   SearchResult,
 } from '../../interfaces.js';
 import type { Thread, ThreadState } from '../../../types/index.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class SqliteThreadStorage implements IThreadStorage {
   private db: Database.Database;
@@ -20,7 +21,8 @@ export class SqliteThreadStorage implements IThreadStorage {
     this.db = db;
   }
 
-  async create(thread: Thread): Promise<Thread> {
+  async create(threadOrId: Thread | string, maybeThread?: unknown): Promise<Thread> {
+    const thread = resolveCreateArgs<Thread>(threadOrId, maybeThread);
     const stmt = this.db.prepare(`
       INSERT INTO Thread (thread_id, created_at, updated_at, metadata, status, "values", interrupts)
       VALUES (?, ?, ?, ?, ?, ?, ?)

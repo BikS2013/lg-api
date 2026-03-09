@@ -11,6 +11,7 @@ import type {
   SearchResult,
 } from '../../interfaces.js';
 import type { Assistant } from '../../../types/index.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class SqlServerAssistantStorage implements IAssistantStorage {
   private pool: sql.ConnectionPool;
@@ -19,7 +20,8 @@ export class SqlServerAssistantStorage implements IAssistantStorage {
     this.pool = pool;
   }
 
-  async create(assistant: Assistant): Promise<Assistant> {
+  async create(assistantOrId: Assistant | string, maybeAssistant?: unknown): Promise<Assistant> {
+    const assistant = resolveCreateArgs<Assistant>(assistantOrId, maybeAssistant);
     const request = this.pool.request();
     request.input('assistant_id', sql.NVarChar(36), assistant.assistant_id);
     request.input('graph_id', sql.NVarChar(255), assistant.graph_id);

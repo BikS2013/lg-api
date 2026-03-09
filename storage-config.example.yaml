@@ -1,0 +1,39 @@
+# Storage Configuration
+# Environment variables can be referenced as ${VAR_NAME}
+#
+# Each provider section contains named profiles. Select the active one
+# with "provider" (type) and "profile" (name). If a provider section
+# has only one profile, the "profile" field can be omitted.
+
+provider: azure-blob  # memory | sqlite | sqlserver | azure-blob
+profile: production   # name of the profile to use within the selected provider
+
+sqlite:
+  local-dev:
+    path: ./data/lg-api-dev.db
+    walMode: true
+  local-test:
+    path: ./data/lg-api-test.db
+    walMode: true
+
+sqlserver:
+  enterprise:
+    server: ${SQLSERVER_HOST}
+    database: ${SQLSERVER_DATABASE}
+    user: ${SQLSERVER_USER}
+    password: ${SQLSERVER_PASSWORD}
+    port: 1433
+    encrypt: true
+    trustServerCertificate: false
+
+azureBlob:
+  production:
+    accountName: ${AZURE_STORAGE_ACCOUNT_NAME}
+    sasToken: ${AZURE_STORAGE_SAS_TOKEN}
+    containerPrefix: lgapi
+    useManagedIdentity: false
+  staging:
+    accountName: ${AZURE_STAGING_ACCOUNT_NAME}
+    sasToken: ${AZURE_STAGING_SAS_TOKEN}
+    containerPrefix: lgapi-staging
+    useManagedIdentity: false

@@ -22,6 +22,7 @@ import {
   sortItems,
   paginate,
 } from './azure-blob-helpers.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class AzureBlobCronStorage implements ICronStorage {
   private containerClient: ContainerClient;
@@ -30,7 +31,8 @@ export class AzureBlobCronStorage implements ICronStorage {
     this.containerClient = containerClient;
   }
 
-  async create(cron: Cron): Promise<Cron> {
+  async create(cronOrId: Cron | string, maybeCron?: unknown): Promise<Cron> {
+    const cron = resolveCreateArgs<Cron>(cronOrId, maybeCron);
     const blobName = `${cron.cron_id}.json`;
     const tags = buildTags({
       cronId: cron.cron_id,

@@ -7,6 +7,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    env: {
+      STORAGE_CONFIG_PATH: 'memory',
+    },
     include: ['src/**/*.test.ts', 'test_scripts/**/*.test.ts'],
     coverage: {
       provider: 'v8',

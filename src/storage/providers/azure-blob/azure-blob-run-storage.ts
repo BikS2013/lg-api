@@ -23,6 +23,7 @@ import {
   sortItems,
   paginate,
 } from './azure-blob-helpers.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 /** Index blob that maps run_id to its blob path for direct lookup. */
 interface RunIndex {
@@ -36,7 +37,8 @@ export class AzureBlobRunStorage implements IRunStorage {
     this.containerClient = containerClient;
   }
 
-  async create(run: Run): Promise<Run> {
+  async create(runOrId: Run | string, maybeRun?: unknown): Promise<Run> {
+    const run = resolveCreateArgs<Run>(runOrId, maybeRun);
     const blobName = this.buildBlobName(run);
     const tags = buildTags({
       runId: run.run_id,

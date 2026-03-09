@@ -12,6 +12,7 @@ import type {
   SearchResult,
 } from '../../interfaces.js';
 import type { Assistant } from '../../../types/index.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class SqliteAssistantStorage implements IAssistantStorage {
   private db: Database.Database;
@@ -20,7 +21,8 @@ export class SqliteAssistantStorage implements IAssistantStorage {
     this.db = db;
   }
 
-  async create(assistant: Assistant): Promise<Assistant> {
+  async create(assistantOrId: Assistant | string, maybeAssistant?: unknown): Promise<Assistant> {
+    const assistant = resolveCreateArgs<Assistant>(assistantOrId, maybeAssistant);
     const stmt = this.db.prepare(`
       INSERT INTO Assistant (assistant_id, graph_id, config, context, created_at, updated_at, metadata, version, name, description)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

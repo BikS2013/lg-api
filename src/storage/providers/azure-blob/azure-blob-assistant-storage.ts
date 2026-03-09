@@ -24,6 +24,7 @@ import {
   sortItems,
   paginate,
 } from './azure-blob-helpers.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class AzureBlobAssistantStorage implements IAssistantStorage {
   private containerClient: ContainerClient;
@@ -32,7 +33,8 @@ export class AzureBlobAssistantStorage implements IAssistantStorage {
     this.containerClient = containerClient;
   }
 
-  async create(assistant: Assistant): Promise<Assistant> {
+  async create(assistantOrId: Assistant | string, maybeAssistant?: unknown): Promise<Assistant> {
+    const assistant = resolveCreateArgs<Assistant>(assistantOrId, maybeAssistant);
     const blobName = `${assistant.assistant_id}/current.json`;
     const tags = buildTags({
       assistantId: assistant.assistant_id,

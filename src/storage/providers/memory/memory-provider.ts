@@ -51,7 +51,9 @@ class MemoryThreadStorage implements IThreadStorage {
     this.repo = repo;
   }
 
-  async create(thread: Thread): Promise<Thread> {
+  // Supports both create(entity) and legacy create(id, entity) calling conventions
+  async create(threadOrId: Thread | string, maybeThread?: unknown): Promise<Thread> {
+    const thread = (typeof threadOrId === 'string' ? maybeThread : threadOrId) as Thread;
     const result = await this.repo.create(thread.thread_id, thread as unknown as RepoThread);
     return result as unknown as Thread;
   }
@@ -131,7 +133,9 @@ class MemoryAssistantStorage implements IAssistantStorage {
     this.repo = repo;
   }
 
-  async create(assistant: Assistant): Promise<Assistant> {
+  // Supports both create(entity) and legacy create(id, entity) calling conventions
+  async create(assistantOrId: Assistant | string, maybeAssistant?: unknown): Promise<Assistant> {
+    const assistant = (typeof assistantOrId === 'string' ? maybeAssistant : assistantOrId) as Assistant;
     const result = await this.repo.create(
       assistant.assistant_id,
       assistant as unknown as RepoAssistant,
@@ -199,7 +203,9 @@ class MemoryRunStorage implements IRunStorage {
     this.repo = repo;
   }
 
-  async create(run: Run): Promise<Run> {
+  // Supports both create(entity) and legacy create(id, entity) calling conventions
+  async create(runOrId: Run | string, maybeRun?: unknown): Promise<Run> {
+    const run = (typeof runOrId === 'string' ? maybeRun : runOrId) as Run;
     const result = await this.repo.create(run.run_id, run as unknown as RepoRun);
     return result as unknown as Run;
   }
@@ -239,7 +245,9 @@ class MemoryCronStorage implements ICronStorage {
     this.repo = repo;
   }
 
-  async create(cron: Cron): Promise<Cron> {
+  // Supports both create(entity) and legacy create(id, entity) calling conventions
+  async create(cronOrId: Cron | string, maybeCron?: unknown): Promise<Cron> {
+    const cron = (typeof cronOrId === 'string' ? maybeCron : cronOrId) as Cron;
     const result = await this.repo.create(cron.cron_id, cron as unknown as RepoCron);
     return result as unknown as Cron;
   }

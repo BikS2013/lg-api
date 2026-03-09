@@ -25,6 +25,7 @@ import {
   sortItems,
   paginate,
 } from './azure-blob-helpers.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class AzureBlobThreadStorage implements IThreadStorage {
   private containerClient: ContainerClient;
@@ -33,7 +34,8 @@ export class AzureBlobThreadStorage implements IThreadStorage {
     this.containerClient = containerClient;
   }
 
-  async create(thread: Thread): Promise<Thread> {
+  async create(threadOrId: Thread | string, maybeThread?: unknown): Promise<Thread> {
+    const thread = resolveCreateArgs<Thread>(threadOrId, maybeThread);
     const blobName = `${thread.thread_id}/state.json`;
     const tags = buildTags({
       threadId: thread.thread_id,

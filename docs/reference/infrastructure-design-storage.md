@@ -1466,117 +1466,77 @@ storage:
 
 **Complete Schema**:
 
+Each provider section contains **named profiles** -- multiple configurations that can be switched via the `profile` field. This allows defining dev, staging, and production configurations in a single file.
+
 ```yaml
 # Storage Configuration for lg-api
-# Supports multiple storage backends with provider-specific settings
+# Each provider section contains named profiles.
+# Select the active one with "provider" (type) + "profile" (name).
+# If a provider section has only one profile, "profile" can be omitted.
+# Environment variables can be referenced as ${VAR_NAME}.
 
-storage:
-  # Active provider: 'inmemory' | 'sqlite' | 'sqlserver' | 'azureblob' | 'hybrid'
-  provider: ${STORAGE_PROVIDER}
+# Active provider type: memory | sqlite | sqlserver | azure-blob
+provider: azure-blob
 
-  # SQLite Configuration
-  sqlite:
-    database_path: ${SQLITE_DB_PATH}  # Path to .db file or ':memory:'
-    enable_wal: true  # Write-Ahead Logging for better concurrency
-    synchronous_mode: NORMAL  # FULL | NORMAL | OFF
-    cache_size_kb: 20000  # Cache size in KB (~80MB)
-    temp_store: MEMORY  # MEMORY | FILE | DEFAULT
-    busy_timeout_ms: 5000  # Wait time when database is locked
-    foreign_keys: true  # Enforce foreign key constraints
+# Active profile name (must match a key in the selected provider section)
+profile: production
 
-  # SQL Server Configuration
-  sqlserver:
-    host: ${SQL_SERVER_HOST}
-    port: ${SQL_SERVER_PORT}
-    database: ${SQL_SERVER_DATABASE}
-    user: ${SQL_SERVER_USER}
-    password: ${SQL_SERVER_PASSWORD}
-    password_expires_at: ${SQL_SERVER_PASSWORD_EXPIRES_AT}  # Optional, for monitoring
+# ------------------------------------------------------------------
+# SQLite Profiles
+# ------------------------------------------------------------------
+sqlite:
+  local-dev:
+    path: ./data/lg-api-dev.db
+    walMode: true
+  local-test:
+    path: ./data/lg-api-test.db
+    walMode: true
 
-    # Connection options
-    encrypt: true  # Use TLS
-    trustServerCertificate: false  # Validate server certificate
-    connectionTimeout: 30000  # Connection timeout in ms
-    requestTimeout: 30000  # Query timeout in ms
+# ------------------------------------------------------------------
+# SQL Server Profiles
+# ------------------------------------------------------------------
+sqlserver:
+  enterprise:
+    server: ${SQLSERVER_HOST}
+    database: ${SQLSERVER_DATABASE}
+    user: ${SQLSERVER_USER}
+    password: ${SQLSERVER_PASSWORD}
+    port: 1433
+    encrypt: true
+    trustServerCertificate: false
 
-    # Connection pool
-    pool:
-      max: 10  # Maximum connections in pool
-      min: 0  # Minimum connections to maintain
-      idleTimeoutMillis: 30000  # Close idle connections after 30s
-      acquireTimeoutMillis: 30000  # Max wait time to acquire connection
+# ------------------------------------------------------------------
+# Azure Blob Storage Profiles
+# ------------------------------------------------------------------
+azureBlob:
+  # Production: SAS token auth
+  production:
+    accountName: ${AZURE_STORAGE_ACCOUNT_NAME}
+    sasToken: ${AZURE_STORAGE_SAS_TOKEN}
+    containerPrefix: lgapi
+    useManagedIdentity: false
 
-    # Feature flags
-    use_json_type: false  # Use native JSON type (SQL Server 2025+)
-    enable_json_index: false  # Use JSON indexes (SQL Server 2025+)
+  # Staging: separate account with SAS
+  staging:
+    accountName: ${AZURE_STAGING_ACCOUNT_NAME}
+    sasToken: ${AZURE_STAGING_SAS_TOKEN}
+    containerPrefix: lgapi-staging
+    useManagedIdentity: false
 
-  # Azure Blob Storage Configuration
-  azureblob:
-    account_name: ${AZURE_STORAGE_ACCOUNT_NAME}
-
-    # Authentication method (choose one)
-    # Option 1: Connection string (simplest, for dev/testing)
-    connection_string: ${AZURE_STORAGE_CONNECTION_STRING}
-
-    # Option 2: Managed Identity (recommended for production)
-    use_managed_identity: ${AZURE_USE_MANAGED_IDENTITY}
-
-    # Option 3: SAS token (time-limited access)
-    sas_token: ${AZURE_STORAGE_SAS_TOKEN}
-    sas_token_expires_at: ${AZURE_STORAGE_SAS_TOKEN_EXPIRES_AT}  # ISO 8601 datetime
-
-    # Container names (must be lowercase, 3-63 chars)
-    containers:
-      threads: lg-api-threads
-      assistants: lg-api-assistants
-      runs: lg-api-runs
-      crons: lg-api-crons
-      store: lg-api-store
-
-    # Blob naming strategy
-    naming:
-      thread_pattern: state_and_history  # 'simple' | 'timestamped' | 'monthly' | 'state_and_history'
-      include_time_prefix: false  # Prefix blobs with YYYY-MM/ for lifecycle management
-
-    # Feature flags
-    enable_blob_index_tags: true  # Use blob index tags for search
-    max_blob_index_tags: 10  # Limit tags per blob
-
-  # Hybrid Configuration (SQL + Blob)
-  hybrid:
-    metadata_provider: sqlserver  # 'sqlite' | 'sqlserver'
-    content_provider: azureblob  # 'azureblob'
-
-    # Routing rules
-    content_size_threshold_bytes: 10240  # 10 KB - content larger than this goes to blob
-    always_blob_entities:  # Entities that always use blob for content
-      - checkpoint_history
-      - store_documents
-
-    # Provider-specific configs (reference sections above)
-    sqlserver:
-      # ... (same as sqlserver section)
-    azureblob:
-      # ... (same as azureblob section)
-
-  # Feature flags (global, provider-independent)
-  features:
-    enable_soft_delete: false  # Soft delete instead of hard delete
-    enable_audit_log: false  # Log all storage operations
-    enable_query_cache: true  # Cache frequent queries (in-memory)
-    cache_ttl_seconds: 300  # Cache entry TTL
-
-  # Migration settings
-  migration:
-    auto_migrate: true  # Automatically run migrations on startup
-    migration_table_name: Migration  # Table to track applied migrations
-
-  # Monitoring and observability
-  monitoring:
-    enable_metrics: true  # Expose storage metrics
-    enable_query_logging: false  # Log all queries (verbose, dev only)
-    slow_query_threshold_ms: 1000  # Log queries slower than this
+  # Cloud-native: managed identity (no secrets)
+  managed:
+    accountName: ${AZURE_STORAGE_ACCOUNT_NAME}
+    containerPrefix: lgapi
+    useManagedIdentity: true
 ```
+
+**Profile Selection Rules:**
+1. `provider` selects the provider type (required)
+2. `profile` selects the named profile within that provider's section
+3. If `profile` is omitted and the section has exactly **one** entry, it is auto-selected
+4. If `profile` is omitted and the section has **multiple** entries, an error is thrown
+5. Environment variable substitution is performed **only** on the selected profile (unused profiles with missing env vars will not cause errors)
+6. `provider: memory` requires no section or profile (in-memory storage has no configuration)
 
 ### 3.2 Configuration Loading
 

@@ -1,15 +1,27 @@
 /**
  * YAML Configuration Loader for Storage
  *
- * Loads storage-config.yaml, substitutes ${ENV_VAR} references with process.env values,
- * and validates the configuration. Throws on missing required fields (no fallbacks).
+ * Loads storage-config.yaml, resolves the selected profile, substitutes
+ * ${ENV_VAR} references, and validates the configuration.
+ *
+ * The YAML file supports multiple named profiles per provider type:
+ *
+ *   provider: azure-blob
+ *   profile: production
+ *   azureBlob:
+ *     production:
+ *       accountName: ...
+ *     staging:
+ *       accountName: ...
+ *
+ * The `profile` field selects which named entry to use. If omitted and
+ * the provider section has exactly one entry, that entry is used automatically.
  *
  * Config resolution strategy:
- * 1. If STORAGE_CONFIG_PATH env var is set, load from that path (throw if file missing).
- * 2. If not set, check if storage-config.yaml exists at project root.
- * 3. If the file exists, load it.
+ * 1. If STORAGE_CONFIG_PATH env var is "memory", return in-memory config.
+ * 2. If STORAGE_CONFIG_PATH env var is set to a path, load from that path.
+ * 3. If not set, check if storage-config.yaml exists at project root.
  * 4. If neither exists, return a memory-provider config.
- *    (This is file-existence detection, not a config fallback -- see Issues - Pending Items P9.)
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -18,6 +30,15 @@ import { parse as parseYaml } from 'yaml';
 import type { StorageConfig, StorageProviderType } from './config.js';
 
 const VALID_PROVIDERS: StorageProviderType[] = ['memory', 'sqlite', 'sqlserver', 'azure-blob'];
+
+/**
+ * Provider type -> YAML section key mapping.
+ */
+const PROVIDER_SECTION_KEY: Record<string, string> = {
+  'sqlite': 'sqlite',
+  'sqlserver': 'sqlserver',
+  'azure-blob': 'azureBlob',
+};
 
 /**
  * Substitute ${ENV_VAR} placeholders in a string with process.env values.
@@ -56,10 +77,129 @@ function substituteEnvVarsDeep(obj: unknown): unknown {
 }
 
 /**
- * Validate the parsed config: ensure required fields are present per provider type.
- * Throws on any missing required field.
+ * Resolve the selected profile from a provider section (map of named profiles).
+ *
+ * If `profile` is specified, look up that name.
+ * If `profile` is not specified and the section has exactly one entry, use it.
+ * Otherwise throw.
  */
-function validateConfig(raw: Record<string, unknown>): StorageConfig {
+function resolveProfile(
+  sectionKey: string,
+  section: Record<string, unknown>,
+  profileName: string | undefined,
+): { name: string; config: Record<string, unknown> } {
+  const entries = Object.entries(section);
+
+  if (entries.length === 0) {
+    throw new Error(
+      `Storage config section "${sectionKey}" is empty. At least one named profile is required.`,
+    );
+  }
+
+  if (profileName) {
+    const entry = section[profileName];
+    if (!entry || typeof entry !== 'object') {
+      const available = entries.map(([k]) => k).join(', ');
+      throw new Error(
+        `Storage config profile "${profileName}" not found in "${sectionKey}". Available profiles: ${available}`,
+      );
+    }
+    return { name: profileName, config: entry as Record<string, unknown> };
+  }
+
+  // No profile specified
+  if (entries.length === 1) {
+    const [name, config] = entries[0];
+    return { name, config: config as Record<string, unknown> };
+  }
+
+  const available = entries.map(([k]) => k).join(', ');
+  throw new Error(
+    `Storage config section "${sectionKey}" has multiple profiles (${available}) but no "profile" field is specified. ` +
+    `Set "profile" to one of: ${available}`,
+  );
+}
+
+/**
+ * Validate a resolved SQLite config.
+ */
+function validateSqlite(profile: Record<string, unknown>, profileName: string): StorageConfig['sqlite'] {
+  if (typeof profile['path'] !== 'string' || profile['path'] === '') {
+    throw new Error(
+      `Storage config for sqlite profile "${profileName}" is missing required field: path`,
+    );
+  }
+  return {
+    path: profile['path'] as string,
+    walMode: profile['walMode'] !== undefined ? Boolean(profile['walMode']) : undefined,
+  };
+}
+
+/**
+ * Validate a resolved SQL Server config.
+ */
+function validateSqlServer(profile: Record<string, unknown>, profileName: string): StorageConfig['sqlserver'] {
+  const requiredFields = ['server', 'database', 'user', 'password'] as const;
+  for (const field of requiredFields) {
+    if (typeof profile[field] !== 'string' || profile[field] === '') {
+      throw new Error(
+        `Storage config for sqlserver profile "${profileName}" is missing required field: ${field}`,
+      );
+    }
+  }
+  return {
+    server: profile['server'] as string,
+    database: profile['database'] as string,
+    user: profile['user'] as string,
+    password: profile['password'] as string,
+    port: profile['port'] !== undefined ? Number(profile['port']) : undefined,
+    encrypt: profile['encrypt'] !== undefined ? Boolean(profile['encrypt']) : undefined,
+    trustServerCertificate:
+      profile['trustServerCertificate'] !== undefined
+        ? Boolean(profile['trustServerCertificate'])
+        : undefined,
+  };
+}
+
+/**
+ * Validate a resolved Azure Blob config.
+ */
+function validateAzureBlob(profile: Record<string, unknown>, profileName: string): StorageConfig['azureBlob'] {
+  const useManagedIdentity = Boolean(profile['useManagedIdentity']);
+  const hasSasToken = typeof profile['sasToken'] === 'string' && profile['sasToken'] !== '';
+  const hasConnectionString = typeof profile['connectionString'] === 'string' && profile['connectionString'] !== '';
+
+  if (useManagedIdentity) {
+    if (typeof profile['accountName'] !== 'string' || profile['accountName'] === '') {
+      throw new Error(
+        `Storage config for azure-blob profile "${profileName}" is missing required field: accountName (required when useManagedIdentity is true)`,
+      );
+    }
+  } else if (hasSasToken) {
+    if (typeof profile['accountName'] !== 'string' || profile['accountName'] === '') {
+      throw new Error(
+        `Storage config for azure-blob profile "${profileName}" is missing required field: accountName (required when using sasToken)`,
+      );
+    }
+  } else if (!hasConnectionString) {
+    throw new Error(
+      `Storage config for azure-blob profile "${profileName}" requires one of: connectionString, sasToken (with accountName), or useManagedIdentity (with accountName)`,
+    );
+  }
+
+  return {
+    connectionString: profile['connectionString'] as string | undefined,
+    accountName: profile['accountName'] as string | undefined,
+    sasToken: profile['sasToken'] as string | undefined,
+    containerPrefix: profile['containerPrefix'] as string | undefined,
+    useManagedIdentity,
+  };
+}
+
+/**
+ * Parse the raw YAML, resolve the profile, substitute env vars, and validate.
+ */
+function parseAndValidate(raw: Record<string, unknown>): StorageConfig {
   const provider = raw['provider'] as string | undefined;
   if (!provider) {
     throw new Error('Storage config is missing required field: provider');
@@ -70,82 +210,37 @@ function validateConfig(raw: Record<string, unknown>): StorageConfig {
     );
   }
 
+  if (provider === 'memory') {
+    return { provider: 'memory' };
+  }
+
+  const profileName = raw['profile'] as string | undefined;
+  const sectionKey = PROVIDER_SECTION_KEY[provider];
+  const section = raw[sectionKey] as Record<string, unknown> | undefined;
+
+  if (!section) {
+    throw new Error(
+      `Storage config for provider "${provider}" is missing required section: ${sectionKey}`,
+    );
+  }
+
+  // Resolve the named profile
+  const resolved = resolveProfile(sectionKey, section, profileName);
+
+  // Substitute env vars only in the selected profile
+  const substituted = substituteEnvVarsDeep(resolved.config) as Record<string, unknown>;
+
   const config: StorageConfig = {
     provider: provider as StorageProviderType,
+    profile: resolved.name,
   };
 
   if (provider === 'sqlite') {
-    const sqlite = raw['sqlite'] as Record<string, unknown> | undefined;
-    if (!sqlite) {
-      throw new Error('Storage config for provider "sqlite" is missing required section: sqlite');
-    }
-    if (typeof sqlite['path'] !== 'string' || sqlite['path'] === '') {
-      throw new Error('Storage config for provider "sqlite" is missing required field: sqlite.path');
-    }
-    config.sqlite = {
-      path: sqlite['path'] as string,
-      walMode: sqlite['walMode'] !== undefined ? Boolean(sqlite['walMode']) : undefined,
-    };
-  }
-
-  if (provider === 'sqlserver') {
-    const sqlserver = raw['sqlserver'] as Record<string, unknown> | undefined;
-    if (!sqlserver) {
-      throw new Error(
-        'Storage config for provider "sqlserver" is missing required section: sqlserver',
-      );
-    }
-    const requiredFields = ['server', 'database', 'user', 'password'] as const;
-    for (const field of requiredFields) {
-      if (typeof sqlserver[field] !== 'string' || sqlserver[field] === '') {
-        throw new Error(
-          `Storage config for provider "sqlserver" is missing required field: sqlserver.${field}`,
-        );
-      }
-    }
-    config.sqlserver = {
-      server: sqlserver['server'] as string,
-      database: sqlserver['database'] as string,
-      user: sqlserver['user'] as string,
-      password: sqlserver['password'] as string,
-      port: sqlserver['port'] !== undefined ? Number(sqlserver['port']) : undefined,
-      encrypt: sqlserver['encrypt'] !== undefined ? Boolean(sqlserver['encrypt']) : undefined,
-      trustServerCertificate:
-        sqlserver['trustServerCertificate'] !== undefined
-          ? Boolean(sqlserver['trustServerCertificate'])
-          : undefined,
-    };
-  }
-
-  if (provider === 'azure-blob') {
-    const azureBlob = raw['azureBlob'] as Record<string, unknown> | undefined;
-    if (!azureBlob) {
-      throw new Error(
-        'Storage config for provider "azure-blob" is missing required section: azureBlob',
-      );
-    }
-    const useManagedIdentity = Boolean(azureBlob['useManagedIdentity']);
-    if (!useManagedIdentity) {
-      // When not using managed identity, connectionString is required
-      if (typeof azureBlob['connectionString'] !== 'string' || azureBlob['connectionString'] === '') {
-        throw new Error(
-          'Storage config for provider "azure-blob" is missing required field: azureBlob.connectionString (required when useManagedIdentity is false)',
-        );
-      }
-    } else {
-      // When using managed identity, accountName is required
-      if (typeof azureBlob['accountName'] !== 'string' || azureBlob['accountName'] === '') {
-        throw new Error(
-          'Storage config for provider "azure-blob" is missing required field: azureBlob.accountName (required when useManagedIdentity is true)',
-        );
-      }
-    }
-    config.azureBlob = {
-      connectionString: azureBlob['connectionString'] as string | undefined,
-      accountName: azureBlob['accountName'] as string | undefined,
-      containerPrefix: azureBlob['containerPrefix'] as string | undefined,
-      useManagedIdentity,
-    };
+    config.sqlite = validateSqlite(substituted, resolved.name);
+  } else if (provider === 'sqlserver') {
+    config.sqlserver = validateSqlServer(substituted, resolved.name);
+  } else if (provider === 'azure-blob') {
+    config.azureBlob = validateAzureBlob(substituted, resolved.name);
   }
 
   return config;
@@ -155,12 +250,18 @@ function validateConfig(raw: Record<string, unknown>): StorageConfig {
  * Load and parse the storage configuration.
  *
  * Resolution order:
- * 1. STORAGE_CONFIG_PATH env var (explicit path, must exist)
- * 2. storage-config.yaml at project root (auto-detection)
- * 3. In-memory provider (no config file needed)
+ * 1. STORAGE_CONFIG_PATH=memory -> in-memory provider
+ * 2. STORAGE_CONFIG_PATH=<path> -> load from that path
+ * 3. Auto-detect storage-config.yaml at project root
+ * 4. No config file -> in-memory provider
  */
 export function loadStorageConfig(): StorageConfig {
   const explicitPath = process.env['STORAGE_CONFIG_PATH'];
+
+  // Special value: "memory" forces in-memory provider, skipping YAML auto-detection
+  if (explicitPath === 'memory') {
+    return { provider: 'memory' };
+  }
 
   let configPath: string | null = null;
 
@@ -191,21 +292,5 @@ export function loadStorageConfig(): StorageConfig {
     throw new Error(`Storage config file is empty or invalid: ${configPath}`);
   }
 
-  // Only substitute env vars for the active provider section to avoid
-  // errors from env vars that belong to unused providers.
-  const provider = (parsed as Record<string, unknown>)['provider'] as string | undefined;
-  const raw = parsed as Record<string, unknown>;
-
-  // Always substitute provider field
-  const result: Record<string, unknown> = { provider: raw['provider'] };
-
-  if (provider === 'sqlite' && raw['sqlite']) {
-    result['sqlite'] = substituteEnvVarsDeep(raw['sqlite']);
-  } else if (provider === 'sqlserver' && raw['sqlserver']) {
-    result['sqlserver'] = substituteEnvVarsDeep(raw['sqlserver']);
-  } else if (provider === 'azure-blob' && raw['azureBlob']) {
-    result['azureBlob'] = substituteEnvVarsDeep(raw['azureBlob']);
-  }
-
-  return validateConfig(result);
+  return parseAndValidate(parsed as Record<string, unknown>);
 }

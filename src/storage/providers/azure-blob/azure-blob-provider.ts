@@ -105,8 +105,9 @@ export class AzureBlobStorageProvider implements IStorageProvider {
    *
    * Priority:
    * 1. If useManagedIdentity is true: use DefaultAzureCredential with accountName
-   * 2. If connectionString is provided: use BlobServiceClient.fromConnectionString()
-   * 3. Otherwise: throw (no valid authentication method)
+   * 2. If sasToken is provided: use accountName + SAS token URL
+   * 3. If connectionString is provided: use BlobServiceClient.fromConnectionString()
+   * 4. Otherwise: throw (no valid authentication method)
    */
   private createBlobServiceClient(): BlobServiceClient {
     if (this.config.useManagedIdentity) {
@@ -120,13 +121,25 @@ export class AzureBlobStorageProvider implements IStorageProvider {
       return new BlobServiceClient(accountUrl, new DefaultAzureCredential());
     }
 
+    if (this.config.sasToken) {
+      if (!this.config.accountName) {
+        throw new Error(
+          'Azure Blob Storage configuration error: "accountName" is required when using "sasToken". ' +
+          'No fallback value is permitted.',
+        );
+      }
+      const sas = this.config.sasToken.startsWith('?') ? this.config.sasToken : `?${this.config.sasToken}`;
+      const accountUrl = `https://${this.config.accountName}.blob.core.windows.net${sas}`;
+      return new BlobServiceClient(accountUrl);
+    }
+
     if (this.config.connectionString) {
       return BlobServiceClient.fromConnectionString(this.config.connectionString);
     }
 
     throw new Error(
       'Azure Blob Storage configuration error: no valid authentication method configured. ' +
-      'Provide either "connectionString" or set "useManagedIdentity" to true with an "accountName". ' +
+      'Provide "connectionString", "sasToken" with "accountName", or set "useManagedIdentity" to true with "accountName". ' +
       'No fallback value is permitted.',
     );
   }

@@ -12,6 +12,7 @@ import type {
   SearchResult,
 } from '../../interfaces.js';
 import type { Cron } from '../../../types/index.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class SqliteCronStorage implements ICronStorage {
   private db: Database.Database;
@@ -20,7 +21,8 @@ export class SqliteCronStorage implements ICronStorage {
     this.db = db;
   }
 
-  async create(cron: Cron): Promise<Cron> {
+  async create(cronOrId: Cron | string, maybeCron?: unknown): Promise<Cron> {
+    const cron = resolveCreateArgs<Cron>(cronOrId, maybeCron);
     const stmt = this.db.prepare(`
       INSERT INTO Cron (cron_id, assistant_id, thread_id, schedule, created_at, updated_at,
         metadata, enabled, on_run_completed, end_time, payload, user_id, next_run_date)

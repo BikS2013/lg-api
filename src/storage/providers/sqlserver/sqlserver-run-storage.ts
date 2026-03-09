@@ -11,6 +11,7 @@ import type {
   SearchResult,
 } from '../../interfaces.js';
 import type { Run } from '../../../types/index.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class SqlServerRunStorage implements IRunStorage {
   private pool: sql.ConnectionPool;
@@ -19,7 +20,8 @@ export class SqlServerRunStorage implements IRunStorage {
     this.pool = pool;
   }
 
-  async create(run: Run): Promise<Run> {
+  async create(runOrId: Run | string, maybeRun?: unknown): Promise<Run> {
+    const run = resolveCreateArgs<Run>(runOrId, maybeRun);
     const request = this.pool.request();
     request.input('run_id', sql.NVarChar(36), run.run_id);
     request.input('thread_id', sql.NVarChar(36), run.thread_id ?? null);

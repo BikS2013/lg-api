@@ -11,6 +11,7 @@ import type {
   SearchResult,
 } from '../../interfaces.js';
 import type { Thread, ThreadState } from '../../../types/index.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class SqlServerThreadStorage implements IThreadStorage {
   private pool: sql.ConnectionPool;
@@ -19,7 +20,8 @@ export class SqlServerThreadStorage implements IThreadStorage {
     this.pool = pool;
   }
 
-  async create(thread: Thread): Promise<Thread> {
+  async create(threadOrId: Thread | string, maybeThread?: unknown): Promise<Thread> {
+    const thread = resolveCreateArgs<Thread>(threadOrId, maybeThread);
     const request = this.pool.request();
     request.input('thread_id', sql.NVarChar(36), thread.thread_id);
     request.input('created_at', sql.NVarChar, thread.created_at);

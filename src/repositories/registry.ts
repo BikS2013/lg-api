@@ -61,6 +61,7 @@ export async function closeStorage(): Promise<void> {
   if (storageProvider) {
     await storageProvider.close();
     storageProvider = null;
+    registry = null;
   }
 }
 
@@ -81,11 +82,31 @@ let registry: RepositoryRegistry | null = null;
 /**
  * Get the shared repository registry (singleton).
  *
+ * When a storage provider has been initialized (via initializeStorage()),
+ * the registry returns the provider's storage interfaces cast to the old
+ * repository types. This bridges the gap so route modules use the active
+ * storage backend without code changes.
+ *
+ * When no storage provider is initialized, falls back to in-memory repositories.
+ *
  * @deprecated Use initializeStorage() and getStorageProvider() instead.
- * This function is kept for backward compatibility with existing route modules
- * and will be removed once all routes are migrated to the storage provider.
  */
 export function getRepositoryRegistry(): RepositoryRegistry {
+  // If a storage provider is initialized, bridge its interfaces to the registry
+  if (storageProvider) {
+    if (!registry) {
+      registry = {
+        assistants: storageProvider.assistants as unknown as AssistantsRepository,
+        threads: storageProvider.threads as unknown as ThreadsRepository,
+        runs: storageProvider.runs as unknown as RunsRepository,
+        crons: storageProvider.crons as unknown as CronsRepository,
+        store: storageProvider.store as unknown as StoreRepository,
+      };
+    }
+    return registry;
+  }
+
+  // Fallback: no storage provider, use in-memory repositories directly
   if (!registry) {
     registry = {
       assistants: new AssistantsRepository(),

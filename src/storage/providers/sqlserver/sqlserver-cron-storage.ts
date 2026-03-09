@@ -11,6 +11,7 @@ import type {
   SearchResult,
 } from '../../interfaces.js';
 import type { Cron } from '../../../types/index.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class SqlServerCronStorage implements ICronStorage {
   private pool: sql.ConnectionPool;
@@ -19,7 +20,8 @@ export class SqlServerCronStorage implements ICronStorage {
     this.pool = pool;
   }
 
-  async create(cron: Cron): Promise<Cron> {
+  async create(cronOrId: Cron | string, maybeCron?: unknown): Promise<Cron> {
+    const cron = resolveCreateArgs<Cron>(cronOrId, maybeCron);
     const request = this.pool.request();
     request.input('cron_id', sql.NVarChar(36), cron.cron_id);
     request.input('assistant_id', sql.NVarChar(36), cron.assistant_id);

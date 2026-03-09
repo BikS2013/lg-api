@@ -12,6 +12,7 @@ import type {
   SearchResult,
 } from '../../interfaces.js';
 import type { Run } from '../../../types/index.js';
+import { resolveCreateArgs } from '../../compat.js';
 
 export class SqliteRunStorage implements IRunStorage {
   private db: Database.Database;
@@ -20,7 +21,8 @@ export class SqliteRunStorage implements IRunStorage {
     this.db = db;
   }
 
-  async create(run: Run): Promise<Run> {
+  async create(runOrId: Run | string, maybeRun?: unknown): Promise<Run> {
+    const run = resolveCreateArgs<Run>(runOrId, maybeRun);
     const stmt = this.db.prepare(`
       INSERT INTO Run (run_id, thread_id, assistant_id, created_at, updated_at, status, metadata, multitask_strategy, kwargs)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
