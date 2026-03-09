@@ -302,8 +302,108 @@ The streaming endpoints must:
 
 ---
 
+## FR-15: Pluggable Storage Infrastructure
+
+The server must support multiple storage backends, selectable at startup via configuration. The active provider is determined by a YAML configuration file with environment variable substitution.
+
+### FR-15.1: Storage Providers
+
+The following storage providers must be supported:
+
+| Provider | Package | Use Case |
+|----------|---------|----------|
+| In-Memory | (built-in) | Development, testing, ephemeral workloads |
+| SQLite | `better-sqlite3` | Single-server deployments, local development with persistence |
+| SQL Server | `mssql` | Enterprise deployments, multi-server, high concurrency |
+| Azure Blob Storage | `@azure/storage-blob` | Cloud-native deployments, large data volumes, cost optimization |
+
+Each provider must implement the full set of entity-specific storage interfaces covering all six entity types: Thread, Assistant, Run, Cron, StoreItem, and ThreadState/Checkpoint.
+
+### FR-15.2: Storage Abstraction Layer
+
+- A unified `IStorageProviderFull` interface must aggregate entity-specific storage interfaces (`IThreadStorage`, `IAssistantStorage`, `IRunStorage`, `ICronStorage`, `IStoreStorage`) and a lifecycle interface (`IStorageProvider`).
+- Each provider must implement `initialize()`, `close()`, `healthCheck()`, and `getProviderInfo()`.
+- A provider factory must instantiate the correct provider based on configuration.
+- The existing domain repositories (AssistantsRepository, ThreadsRepository, etc.) must delegate to the active storage provider while preserving their public API unchanged.
+
+### FR-15.3: YAML Configuration System
+
+- Storage configuration must be loaded from a YAML file whose path is specified by the `STORAGE_CONFIG_PATH` environment variable (required, no fallback).
+- The YAML file must support `${ENV_VAR}` substitution patterns for secrets and environment-specific values.
+- Only fields relevant to the selected provider are validated; fields for inactive providers are ignored.
+- Missing required configuration fields must cause the server to throw a descriptive exception at startup. No fallback or default values are permitted.
+- Credential expiration fields (`password_expires_at`, `sas_token_expires_at`) must trigger a warning when expiration is within 7 days and throw when already expired.
+
+### FR-15.4: SQLite Provider Requirements
+
+- Schema must use singular table names: Thread, Checkpoint, Assistant, AssistantVersion, Run, Cron, StoreItem, ThreadState, Migration.
+- WAL mode must be enabled by default for better concurrency.
+- JSON fields stored as TEXT with `json_extract()` used for metadata filtering.
+- A version-based migration system must track and apply schema changes.
+- Configurable pragmas: `synchronous_mode`, `cache_size_kb`, `temp_store`, `busy_timeout_ms`, `foreign_keys`.
+
+### FR-15.5: SQL Server Provider Requirements
+
+- Schema logically identical to SQLite, adapted for SQL Server types (NVARCHAR, DATETIMEOFFSET, NVARCHAR(MAX) for JSON with ISJSON checks).
+- Connection pooling must be used (pool created once at startup, reused for all queries, closed on shutdown).
+- Transaction support for multi-step operations (e.g., thread copy, version rollback).
+- All queries must use parameterized inputs (no string interpolation).
+- Password expiration monitoring with proactive warnings.
+
+### FR-15.6: Azure Blob Storage Provider Requirements
+
+- One container per entity type (e.g., `lg-api-threads`, `lg-api-assistants`).
+- Thread state stored with state + history separation pattern: `{thread_id}/state.json` for latest state, `{thread_id}/states/{timestamp}.json` for history.
+- Blob index tags set on entities for server-side search (limited to 10 tags per blob).
+- Three authentication methods: connection string, DefaultAzureCredential (managed identity), SAS token.
+- SAS token expiration monitoring with proactive warnings.
+- Optimistic concurrency via ETags for updates.
+- Client-side filtering as fallback for complex metadata queries not supported by blob tags.
+
+### FR-15.7: Health Check Integration
+
+- The `/ok` health check endpoint must reflect storage provider health status.
+- `healthCheck()` must verify actual connectivity to the storage backend (not just return true).
+
+### FR-15.8: Graceful Shutdown
+
+- On server shutdown, `storageProvider.close()` must be called to release connections, close file handles, and clean up resources.
+
+---
+
+## FR-16: Configuration Management (Extended)
+
+Extends FR-13 with storage-related configuration.
+
+### Additional Required Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `STORAGE_CONFIG_PATH` | Yes | Absolute path to the storage YAML configuration file |
+
+### Provider-Specific Environment Variables (referenced in YAML)
+
+| Variable | Required When | Description |
+|----------|--------------|-------------|
+| `STORAGE_PROVIDER` | Always | Active provider: `inmemory`, `sqlite`, `sqlserver`, `azureblob` |
+| `SQLITE_DB_PATH` | provider=sqlite | Path to SQLite database file or `:memory:` |
+| `SQL_SERVER_HOST` | provider=sqlserver | SQL Server hostname |
+| `SQL_SERVER_PORT` | provider=sqlserver | SQL Server port |
+| `SQL_SERVER_DATABASE` | provider=sqlserver | Database name |
+| `SQL_SERVER_USER` | provider=sqlserver | Database username |
+| `SQL_SERVER_PASSWORD` | provider=sqlserver | Database password |
+| `SQL_SERVER_PASSWORD_EXPIRES_AT` | Optional | ISO 8601 date for password expiration monitoring |
+| `AZURE_STORAGE_ACCOUNT_NAME` | provider=azureblob | Azure Storage account name |
+| `AZURE_STORAGE_CONNECTION_STRING` | One auth method required | Connection string for Azure Storage |
+| `AZURE_USE_MANAGED_IDENTITY` | One auth method required | Set to `true` for managed identity auth |
+| `AZURE_STORAGE_SAS_TOKEN` | One auth method required | SAS token for Azure Storage |
+| `AZURE_STORAGE_SAS_TOKEN_EXPIRES_AT` | Optional | ISO 8601 date for SAS token expiration monitoring |
+
+---
+
 ## Revision History
 
 | Date | Version | Description |
 |------|---------|-------------|
+| 2026-03-09 | 1.1 | Added FR-15 (Pluggable Storage Infrastructure) and FR-16 (Extended Configuration Management) |
 | 2026-03-08 | 1.0 | Initial functional requirements extracted from refined request specification |

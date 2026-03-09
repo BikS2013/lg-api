@@ -9,18 +9,25 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.0",
+    "@azure/storage-blob": "^12.31.0",
     "@fastify/cors": "^10.0.0",
     "@fastify/swagger": "^9.0.0",
     "@fastify/swagger-ui": "^5.0.0",
     "@fastify/type-provider-typebox": "^6.1.0",
     "@sinclair/typebox": "^0.34.0",
+    "better-sqlite3": "^12.6.2",
     "better-sse": "^0.13.0",
     "dotenv": "^17.3.1",
     "fastify": "^5",
     "fastify-plugin": "^5.1.0",
-    "uuid": "^11.0.0"
+    "mssql": "^12.2.0",
+    "uuid": "^11.0.0",
+    "yaml": "^2.8.2"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/mssql": "^9.1.9",
     "@types/node": "^22.0.0",
     "@types/uuid": "^10.0.0",
     "tsx": "^4.0.0",

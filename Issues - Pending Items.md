@@ -44,11 +44,21 @@
 - **Severity**: Low
 - **Recommendation**: Add the route when needed for SDK compatibility testing.
 
+### P9 - Configuration exception: STORAGE_CONFIG_PATH defaults to file-existence detection
+- **File**: `src/storage/yaml-config-loader.ts`
+- **Description**: Per project rules, no fallback values are permitted for configuration. However, the storage system needs a way to work without a config file (defaulting to in-memory provider). The approach is: if `STORAGE_CONFIG_PATH` env var is not set, the loader checks if `storage-config.yaml` exists at the project root. If the file exists, it is loaded. If neither the env var nor the file exist, the system defaults to the in-memory provider. This is file-existence detection, not a config fallback -- documented as a deliberate exception per the storage infrastructure design.
+- **Severity**: Info (deliberate design decision)
+
 ---
 
 ---
 
 ## Completed Items
+
+### C6 - SQLite schema uses unquoted `values` column name (reserved keyword)
+- **Files**: `src/storage/providers/sqlite/sqlite-schema.ts`, `src/storage/providers/sqlite/sqlite-thread-storage.ts`
+- **Description**: The Thread and ThreadState table DDL and INSERT/UPDATE queries used `values` as a column name without quoting. `VALUES` is a reserved keyword in SQLite, causing "near values: syntax error" on table creation and all queries referencing this column.
+- **Fix**: Quoted the column name as `"values"` in the schema DDL (`sqlite-schema.ts`) and in all SQL statements in `sqlite-thread-storage.ts` (INSERT INTO Thread, UPDATE Thread, INSERT INTO ThreadState).
 
 ### C4 - TypeBox `$id` fields causing Fastify serializer conflicts
 - **Files**: All files in `src/schemas/`

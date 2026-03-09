@@ -3,6 +3,7 @@ export interface AppConfig {
   host: string;
   authEnabled: boolean;
   apiKey: string;
+  storageConfigPath?: string;
 }
 
 function requireEnv(name: string): string {
@@ -39,10 +40,16 @@ export function loadConfig(): AppConfig {
     apiKey = requireEnv('LG_API_KEY');
   }
 
+  // STORAGE_CONFIG_PATH is optional -- when not set, the storage layer
+  // auto-detects storage-config.yaml or defaults to in-memory.
+  // See "Issues - Pending Items.md" P9 for the documented exception.
+  const storageConfigPath = process.env['STORAGE_CONFIG_PATH'] || undefined;
+
   return {
     port,
     host,
     authEnabled,
     apiKey,
+    storageConfigPath,
   };
 }

@@ -12,6 +12,7 @@ import runsRoutes from './modules/runs/runs.routes.js';
 import cronsRoutes from './modules/crons/crons.routes.js';
 import storeRoutes from './modules/store/store.routes.js';
 import systemRoutes from './modules/system/system.routes.js';
+import { initializeStorage, closeStorage } from './repositories/registry.js';
 
 // Extend Fastify instance with config
 declare module 'fastify' {
@@ -27,6 +28,15 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
 
   // Decorate with config so plugins can access it
   app.decorate('config', config);
+
+  // Initialize the storage provider before registering routes.
+  // This ensures the storage layer is ready when route modules access it.
+  await initializeStorage();
+
+  // Register a shutdown hook to close the storage provider gracefully.
+  app.addHook('onClose', async () => {
+    await closeStorage();
+  });
 
   // Register plugins
   await app.register(corsPlugin);

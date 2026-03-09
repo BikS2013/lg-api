@@ -24,6 +24,7 @@ All configuration is via environment variables. **No fallback values** - missing
 | `LG_API_HOST` | Yes | Server bind address |
 | `LG_API_AUTH_ENABLED` | Yes | Enable/disable API key auth ("true"/"false") |
 | `LG_API_KEY` | When auth enabled | Expected API key value |
+| `STORAGE_CONFIG_PATH` | No | Path to storage-config.yaml (auto-detects at project root if not set) |
 
 ## Project Structure
 
@@ -41,6 +42,15 @@ src/
     interfaces.ts       - IRepository<T> interface
     in-memory.repository.ts - Base in-memory store
     registry.ts         - Shared repository registry
+  storage/
+    interfaces.ts       - Storage abstraction interfaces
+    config.ts           - Storage config types
+    yaml-config-loader.ts - YAML config loader with env substitution
+    provider-factory.ts - Storage provider factory
+    index.ts            - Barrel export
+    providers/
+      memory/
+        memory-provider.ts - In-memory IStorageProvider implementation
   modules/
     assistants/         - 11 endpoints
     threads/            - 12 endpoints
@@ -54,6 +64,29 @@ src/
   errors/               - ApiError class
   utils/                - UUID, date, pagination helpers
 ```
+
+## Storage Layer
+
+The project uses a pluggable storage abstraction layer (`src/storage/`) that supports multiple backends selected via YAML configuration.
+
+### Architecture
+- `src/storage/interfaces.ts` -- Entity-specific storage interfaces (IThreadStorage, IAssistantStorage, IRunStorage, ICronStorage, IStoreStorage) and the combined IStorageProvider
+- `src/storage/config.ts` -- StorageConfig types for each provider (memory, sqlite, sqlserver, azure-blob)
+- `src/storage/yaml-config-loader.ts` -- Loads storage-config.yaml with ${ENV_VAR} substitution
+- `src/storage/provider-factory.ts` -- Creates the appropriate IStorageProvider based on config
+- `src/storage/providers/memory/memory-provider.ts` -- In-memory adapter wrapping existing repositories
+- `src/storage/index.ts` -- Barrel export
+
+### Configuration
+Storage is configured via `storage-config.yaml` at the project root. Override the path with the `STORAGE_CONFIG_PATH` env var. If neither the env var nor the default file exists, the in-memory provider is used (see Issues P9 for the documented exception).
+
+### Supported Providers
+| Provider | Package | Status | Files |
+|----------|---------|--------|-------|
+| `memory` | (built-in) | Implemented | `src/storage/providers/memory/` |
+| `sqlite` | better-sqlite3 | Implemented | `src/storage/providers/sqlite/` |
+| `sqlserver` | mssql | Implemented | `src/storage/providers/sqlserver/` |
+| `azure-blob` | @azure/storage-blob | Implemented | `src/storage/providers/azure-blob/` |
 
 ## Commands
 

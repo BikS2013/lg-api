@@ -25,3 +25,9 @@ coverage/
 
 # Logs
 *.log
+
+# Storage data (SQLite database files, etc.)
+data/
+
+# Storage configuration (may contain credentials)
+storage-config.yaml
