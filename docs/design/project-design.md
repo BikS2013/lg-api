@@ -3086,6 +3086,7 @@ Custom agents are integrated as isolated CLI tools that communicate via stdin/st
   assistant_id: string;     // assistant/agent configuration ID
   messages: AgentMessage[];  // conversation history + new message
   documents?: AgentDocument[];  // attached documents
+  state?: Record<string, unknown>;  // arbitrary state exchanged between lg-api and agent
   metadata?: Record<string, unknown>;
 }
 ```
@@ -3096,9 +3097,12 @@ Custom agents are integrated as isolated CLI tools that communicate via stdin/st
   thread_id: string;
   run_id: string;
   messages: AgentMessage[];  // agent response messages
+  state?: Record<string, unknown>;  // agent can return modified state
   metadata?: Record<string, unknown>;
 }
 ```
+
+**State object ownership**: The `state` field is owned exclusively by the agent. The lg-api **never modifies** the state object - it only passes it through untouched. On input, the lg-api sends the state as-is from the previous agent response (stored in thread state) or from an explicit `input.state` override. On output, the agent returns its updated state which the lg-api stores without modification. This ensures the agent has full control over its working memory (counters, preferences, context, etc.).
 
 ### 11.3 Agent Registry (`agent-registry.yaml`)
 

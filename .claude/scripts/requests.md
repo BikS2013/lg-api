@@ -56,11 +56,24 @@ A dedicated connector to support the integration between the current implmentati
 
 Before you try to use the test agent through the lg-api (the current project) you must try the test agent alone to ensure that works correctly.
 
+### Request 007
+I want you to enhance the lg-api interface with the agents to exchange a state object additionaly to the current input and output structures 
+        Input format (AgentRequest):
+        {
+          "thread_id": "string",
+          "run_id": "string",
+          "assistant_id": "string",
+          "messages": [{"role": "user|assistant|system", "content": "string"}],
+          "documents": [{"id": "string", "title": "string", "content": "string"}],  // optional
+          "metadata": {}  // optional
+        }
 
+        Output format (AgentResponse):
+        {
+          "thread_id": "string",
+          "run_id": "string",
+          "messages": [{"role": "assistant", "content": "string"}],
+          "metadata": {}  // optional
+        }
+The state object must exist in both the input and output messages. 
 
-### Request 003 
-I want you to connect a configuration based service for the assistants. 
-
-An assistant-config.yaml will be used to allow the expose of assistants either through a REST API, or a command line interface to the 
-
-For each assistant I want a 

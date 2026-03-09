@@ -71,6 +71,7 @@ export async function runAgent(
         content: responseContent,
       },
     ],
+    state: request.state,
     metadata: request.metadata,
   };
 }

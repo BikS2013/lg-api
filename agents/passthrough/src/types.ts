@@ -4,6 +4,7 @@ export interface AgentRequest {
   assistant_id: string;
   messages: Message[];
   documents?: Document[];
+  state?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
@@ -23,6 +24,7 @@ export interface AgentResponse {
   thread_id: string;
   run_id: string;
   messages: Message[];
+  state?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 

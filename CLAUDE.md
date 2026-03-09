@@ -153,7 +153,8 @@ lg-api Run -> RequestComposer -> AgentRequest JSON -> CliAgentConnector
           "assistant_id": "string",
           "messages": [{"role": "user|assistant|system", "content": "string"}],
           "documents": [{"id": "string", "title": "string", "content": "string"}],  // optional
-          "metadata": {}  // optional
+          "state": {},     // optional - arbitrary state object exchanged between lg-api and agent
+          "metadata": {}   // optional
         }
 
         Output format (AgentResponse):
@@ -161,7 +162,8 @@ lg-api Run -> RequestComposer -> AgentRequest JSON -> CliAgentConnector
           "thread_id": "string",
           "run_id": "string",
           "messages": [{"role": "assistant", "content": "string"}],
-          "metadata": {}  // optional
+          "state": {},     // optional - agent can return modified state
+          "metadata": {}   // optional
         }
 
         Examples:

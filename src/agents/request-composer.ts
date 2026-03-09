@@ -47,7 +47,10 @@ export class RequestComposer {
     // 3. Gather documents from run input
     const documents = this.extractDocumentsFromInput(input);
 
-    // 4. Gather metadata from run input
+    // 4. Gather state from thread state and/or input
+    const state = this.extractState(input, threadState);
+
+    // 5. Gather metadata from run input
     const metadata = this.extractMetadata(input);
 
     const request: AgentRequest = {
@@ -59,6 +62,10 @@ export class RequestComposer {
 
     if (documents.length > 0) {
       request.documents = documents;
+    }
+
+    if (state && Object.keys(state).length > 0) {
+      request.state = state;
     }
 
     if (Object.keys(metadata).length > 0) {
@@ -194,12 +201,44 @@ export class RequestComposer {
   }
 
   /**
-   * Extract metadata from run input (everything except messages and documents).
+   * Extract state to pass to the agent.
+   *
+   * The lg-api does NOT modify the state object. Only the agent is responsible
+   * for maintaining and changing it. The lg-api simply passes the state through:
+   *
+   * 1. If the thread has a stored state (from a previous agent response), pass it as-is
+   * 2. If the run input includes an explicit state, pass it as-is (overrides stored state)
+   *
+   * No merging, no field extraction, no transformation.
+   */
+  private extractState(
+    input: Record<string, unknown>,
+    threadState?: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
+    // Explicit state from input takes priority (passed through untouched)
+    const inputState = input['state'] as Record<string, unknown> | undefined;
+    if (inputState && typeof inputState === 'object') {
+      return inputState;
+    }
+
+    // Otherwise, pass the stored state from thread (set by a previous agent response)
+    if (threadState) {
+      const storedState = threadState['state'] as Record<string, unknown> | undefined;
+      if (storedState && typeof storedState === 'object') {
+        return storedState;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract metadata from run input (everything except messages, documents, and state).
    */
   private extractMetadata(input: Record<string, unknown>): Record<string, unknown> {
     const metadata: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input)) {
-      if (key !== 'messages' && key !== 'documents') {
+      if (key !== 'messages' && key !== 'documents' && key !== 'state') {
         metadata[key] = value;
       }
     }
