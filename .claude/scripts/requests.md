@@ -44,6 +44,19 @@ I dont want you to create any code, I just want you to study and explain the con
 I want you to proceed with the implementation of the design proposed through the 
 ./docs/reference/infrastructure-design-storage.md and ./docs/reference/infrastructure-design-storage-part2.md documents 
 
+### Request 006
+I want you to create a pass-through agent to be used for test purposes.
+The test agent must send every request that gets directly to an llm.
+The llm must be configurable through an llm-config,yaml file.
+The agent must support various llms from various providers (including azure, google, anthropic).
+The agent must use the langchain library to communicate with the llms.
+The agent must be implemented as a cli tool and must be totaly isolated from the rest of the current implementation.
+
+A dedicated connector to support the integration between the current implmentation and cli implemented agents must be created to connect the test agent to the current implementation.
+
+Before you try to use the test agent through the lg-api (the current project) you must try the test agent alone to ensure that works correctly.
+
+
 
 ### Request 003 
 I want you to connect a configuration based service for the assistants. 

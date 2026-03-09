@@ -1,0 +1,20 @@
+# Agent Registry
+# Maps graph_id to CLI agent commands.
+#
+# Each agent entry defines the command to spawn, its arguments,
+# working directory, timeout, and an optional description.
+
+agents:
+  passthrough:
+    command: npx
+    args: ["tsx", "agents/passthrough/src/index.ts"]
+    cwd: "."
+    description: "Pass-through test agent - forwards requests directly to an LLM"
+    timeout: 60000
+
+  # Example for a Python agent:
+  # rag-agent:
+  #   command: python
+  #   args: ["-m", "agents.rag.main"]
+  #   cwd: "./agents/rag"
+  #   timeout: 120000

@@ -83,11 +83,11 @@ export class AzureBlobAssistantStorage implements IAssistantStorage {
     const allBlobs = await listBlobsByPrefix(this.containerClient, '');
     const assistantBlobs = allBlobs.filter((b) => b.name.endsWith('/current.json'));
 
-    // Download all assistants
+    // Download all assistants, skipping invalid/corrupt blobs
     const assistants: Assistant[] = [];
     for (const blob of assistantBlobs) {
       const assistant = await downloadJson<Assistant>(this.containerClient, blob.name);
-      if (assistant) {
+      if (assistant && typeof assistant === 'object' && assistant.assistant_id) {
         assistants.push(assistant);
       }
     }

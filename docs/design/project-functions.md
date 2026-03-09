@@ -401,9 +401,62 @@ Extends FR-13 with storage-related configuration.
 
 ---
 
+## FR-17: Custom Agent Integration
+
+The system must support integration with custom agents implemented as isolated CLI tools.
+
+### FR-17.1: Agent Registry
+- A YAML-based registry (`agent-registry.yaml`) maps assistant `graph_id` values to CLI agent commands
+- Each agent entry specifies: command, args, working directory, description, timeout
+- The registry file path can be overridden via `AGENT_REGISTRY_PATH` env var
+- Missing registry file must throw an exception (no fallback)
+
+### FR-17.2: CLI Agent Connector
+- The connector spawns agents as child processes using `child_process.spawn`
+- Sends `AgentRequest` as JSON to the agent's stdin
+- Reads `AgentResponse` as JSON from the agent's stdout
+- Collects stderr for error reporting
+- Enforces configurable timeout per agent (kills process on timeout)
+- Supports both synchronous execution and streaming event generation
+
+### FR-17.3: Request Composition
+- Composes an `AgentRequest` from lg-api run context:
+  - Conversation history from thread state (`threadState.values.messages`)
+  - New user message from run input (`input.messages`)
+  - Documents from run input (`input.documents`)
+- Normalizes both LangGraph message types (`human`/`ai`) and standard roles (`user`/`assistant`)
+
+### FR-17.4: Pass-through Test Agent
+- Isolated CLI tool under `agents/passthrough/` with its own `package.json`
+- Forwards all requests directly to a configurable LLM via LangChain
+- Supports multiple LLM providers: Azure OpenAI, OpenAI, Anthropic, Google Gemini
+- Configured via `llm-config.yaml` with named profiles and `${ENV_VAR}` substitution
+- Prepends documents as system context when provided
+
+### FR-17.5: Agent Request/Response Protocol
+- `AgentRequest`: `{ thread_id, run_id, assistant_id, messages[], documents?, metadata? }`
+- `AgentResponse`: `{ thread_id, run_id, messages[], metadata? }`
+- `AgentMessage`: `{ role: 'user'|'assistant'|'system', content: string }`
+- `AgentDocument`: `{ id, title?, content, metadata? }`
+
+### FR-17.6: Agent Configuration Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AGENT_REGISTRY_PATH` | No | Path to agent-registry.yaml (auto-detects at project root) |
+| `AZURE_OPENAI_API_KEY` | When using Azure OpenAI | Azure OpenAI API key |
+| `AZURE_OPENAI_ENDPOINT` | When using Azure OpenAI | Azure OpenAI endpoint URL |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | When using Azure OpenAI | Azure OpenAI deployment name |
+| `OPENAI_API_KEY` | When using OpenAI | OpenAI API key |
+| `ANTHROPIC_API_KEY` | When using Anthropic | Anthropic API key |
+| `GOOGLE_API_KEY` | When using Google | Google AI API key |
+
+---
+
 ## Revision History
 
 | Date | Version | Description |
 |------|---------|-------------|
+| 2026-03-10 | 1.2 | Added FR-17 (Custom Agent Integration) with sub-requirements FR-17.1 through FR-17.6 |
 | 2026-03-09 | 1.1 | Added FR-15 (Pluggable Storage Infrastructure) and FR-16 (Extended Configuration Management) |
 | 2026-03-08 | 1.0 | Initial functional requirements extracted from refined request specification |

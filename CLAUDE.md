@@ -25,6 +25,10 @@ All configuration is via environment variables. **No fallback values** - missing
 | `LG_API_AUTH_ENABLED` | Yes | Enable/disable API key auth ("true"/"false") |
 | `LG_API_KEY` | When auth enabled | Expected API key value |
 | `STORAGE_CONFIG_PATH` | No | Path to storage-config.yaml (auto-detects at project root if not set) |
+| `AGENT_REGISTRY_PATH` | No | Path to agent-registry.yaml (auto-detects at project root if not set) |
+| `AZURE_OPENAI_API_KEY` | When using passthrough agent with Azure OpenAI | Azure OpenAI API key |
+| `AZURE_OPENAI_ENDPOINT` | When using passthrough agent with Azure OpenAI | Azure OpenAI endpoint URL |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | When using passthrough agent with Azure OpenAI | Azure OpenAI deployment name |
 
 ## Project Structure
 
@@ -60,9 +64,16 @@ src/
     system/             - 2 endpoints (/ok, /info)
   streaming/
     stream-manager.ts   - SSE session management
+  agents/
+    types.ts            - AgentRequest/Response interfaces
+    agent-registry.ts   - Loads agent-registry.yaml
+    cli-connector.ts    - Spawns CLI agents, handles stdin/stdout
+    request-composer.ts - Builds AgentRequest from thread state + input
   plugins/              - Fastify plugins (cors, swagger, auth, error-handler)
   errors/               - ApiError class
   utils/                - UUID, date, pagination helpers
+agents/
+  passthrough/          - Isolated pass-through test agent (own package.json)
 ```
 
 ## Storage Layer
@@ -87,6 +98,137 @@ Storage is configured via `storage-config.yaml` at the project root. Override th
 | `sqlite` | better-sqlite3 | Implemented | `src/storage/providers/sqlite/` |
 | `sqlserver` | mssql | Implemented | `src/storage/providers/sqlserver/` |
 | `azure-blob` | @azure/storage-blob | Implemented | `src/storage/providers/azure-blob/` |
+
+## Agent System
+
+### Architecture
+Custom agents are implemented as isolated CLI tools that communicate via stdin/stdout JSON. The lg-api connects to them through a CLI Agent Connector that spawns child processes, passes the agent request as JSON on stdin, and reads the agent response from stdout.
+
+```
+lg-api Run -> RequestComposer -> AgentRequest JSON -> CliAgentConnector
+  -> child_process.spawn(agent CLI) -> stdin: JSON -> Agent -> LLM
+  -> stdout: JSON response -> CliAgentConnector -> SSE events -> UI
+```
+
+### Configuration Files
+- `agent-registry.yaml` - Maps assistant graph_ids to CLI agent commands
+- `agents/passthrough/llm-config.yaml` - LLM provider config (named profiles, ${ENV_VAR} substitution)
+
+### Components
+- `src/agents/agent-registry.ts` - Loads agent-registry.yaml, resolves agent configs by graph_id
+- `src/agents/cli-connector.ts` - Spawns CLI agents, handles stdin/stdout JSON, timeouts, streaming
+- `src/agents/request-composer.ts` - Builds AgentRequest from thread state + run input + documents
+- `src/agents/types.ts` - AgentRequest, AgentResponse, AgentMessage, AgentDocument interfaces
+- `agents/passthrough/` - Isolated pass-through test agent (own package.json, LangChain)
+
+## Tools
+
+<passthrough-agent>
+    <objective>
+        Pass-through test agent that forwards user requests directly to a configurable LLM via LangChain. Used for testing the agent integration pipeline end-to-end.
+    </objective>
+    <command>
+        echo '{"thread_id":"t1","run_id":"r1","assistant_id":"a1","messages":[{"role":"user","content":"Hello"}]}' | npx tsx agents/passthrough/src/index.ts
+    </command>
+    <info>
+        An isolated CLI tool (separate package.json under agents/passthrough/) that:
+        - Reads an AgentRequest JSON object from stdin
+        - Sends the messages to a configured LLM via LangChain
+        - Writes an AgentResponse JSON object to stdout
+        - Errors go to stderr only (never stdout)
+
+        LLM configuration: agents/passthrough/llm-config.yaml
+        Supports named profiles per provider (provider + profile fields).
+
+        Supported LLM providers:
+        - azure-openai: Requires AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT_NAME
+        - openai: Requires OPENAI_API_KEY
+        - anthropic: Requires ANTHROPIC_API_KEY
+        - google: Requires GOOGLE_API_KEY
+
+        Input format (AgentRequest):
+        {
+          "thread_id": "string",
+          "run_id": "string",
+          "assistant_id": "string",
+          "messages": [{"role": "user|assistant|system", "content": "string"}],
+          "documents": [{"id": "string", "title": "string", "content": "string"}],  // optional
+          "metadata": {}  // optional
+        }
+
+        Output format (AgentResponse):
+        {
+          "thread_id": "string",
+          "run_id": "string",
+          "messages": [{"role": "assistant", "content": "string"}],
+          "metadata": {}  // optional
+        }
+
+        Examples:
+        # Simple question
+        echo '{"thread_id":"t1","run_id":"r1","assistant_id":"a1","messages":[{"role":"user","content":"What is 2+2?"}]}' | npx tsx agents/passthrough/src/index.ts
+
+        # With conversation history
+        echo '{"thread_id":"t1","run_id":"r1","assistant_id":"a1","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello!"},{"role":"user","content":"How are you?"}]}' | npx tsx agents/passthrough/src/index.ts
+
+        # With documents
+        echo '{"thread_id":"t1","run_id":"r1","assistant_id":"a1","messages":[{"role":"user","content":"Summarize the doc"}],"documents":[{"id":"d1","title":"Report","content":"Q1 revenue was $10M..."}]}' | npx tsx agents/passthrough/src/index.ts
+
+        Setup:
+        cd agents/passthrough && npm install
+        # Set env vars in agents/passthrough/.env or export them
+    </info>
+</passthrough-agent>
+
+<cli-agent-connector>
+    <objective>
+        Bridges the lg-api server to CLI-based custom agents. Spawns agents as child processes, passes requests via stdin JSON, and reads responses from stdout JSON.
+    </objective>
+    <command>
+        Used programmatically from src/agents/. Not a standalone CLI tool.
+    </command>
+    <info>
+        Components:
+        - AgentRegistry (src/agents/agent-registry.ts): Loads agent-registry.yaml, provides getAgentConfig(graphId)
+        - CliAgentConnector (src/agents/cli-connector.ts): executeAgent(graphId, request), streamAgent(graphId, request)
+        - RequestComposer (src/agents/request-composer.ts): composeRequest({threadId, runId, assistantId, input, threadState})
+
+        Configuration: agent-registry.yaml at project root
+        Override path with AGENT_REGISTRY_PATH env var.
+
+        agent-registry.yaml format:
+        agents:
+          passthrough:                    # graph_id used in assistant config
+            command: npx                  # executable to run
+            args: ["tsx", "agents/passthrough/src/index.ts"]  # command arguments
+            cwd: "."                      # working directory
+            description: "description"    # human-readable description
+            timeout: 60000               # max execution time in ms
+
+        Adding a new agent:
+        1. Create the agent CLI tool (any language, reads JSON stdin, writes JSON stdout)
+        2. Add an entry to agent-registry.yaml with its graph_id and command
+        3. Create an assistant in lg-api with that graph_id
+
+        Programmatic usage:
+        import { AgentRegistry } from './agents/agent-registry.js';
+        import { CliAgentConnector } from './agents/cli-connector.js';
+        import { RequestComposer } from './agents/request-composer.js';
+
+        const registry = new AgentRegistry();
+        const connector = new CliAgentConnector(registry);
+        const composer = new RequestComposer();
+
+        const request = await composer.composeRequest({
+          threadId: 'thread-1', runId: 'run-1', assistantId: 'asst-1',
+          input: { messages: [{ role: 'user', content: 'Hello' }] },
+          threadState: { values: { messages: [...history] } }
+        });
+
+        const response = await connector.executeAgent('passthrough', request);
+        // Or stream: for await (const event of connector.streamAgent('passthrough', request)) { ... }
+    </info>
+</cli-agent-connector>
 
 ## Commands
 

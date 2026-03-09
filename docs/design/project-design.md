@@ -3033,8 +3033,119 @@ fastify.decorate('storeRepo', new StoreRepository());
 
 ---
 
+---
+
+## 11. Custom Agent Integration Architecture
+
+### 11.1 Overview
+
+Custom agents are integrated as isolated CLI tools that communicate via stdin/stdout JSON. This decouples agent implementations from the API server, allowing agents to be written in any language.
+
+```
++-------------------------------------------------------------------+
+|                          lg-api Server                             |
+|                                                                    |
+|  Run Request                                                       |
+|      |                                                             |
+|      v                                                             |
+|  RequestComposer                                                   |
+|  - Extracts messages from thread state (history)                   |
+|  - Extracts new message from run input                             |
+|  - Extracts documents from run input                               |
+|  - Produces AgentRequest JSON                                      |
+|      |                                                             |
+|      v                                                             |
+|  CliAgentConnector                                                 |
+|  - Looks up agent command from AgentRegistry (by graph_id)         |
+|  - Spawns child_process with agent command                         |
+|  - Writes AgentRequest JSON to stdin                               |
+|  - Reads AgentResponse JSON from stdout                            |
+|  - Handles timeouts, errors, stderr                                |
+|      |                                                             |
++------+------------------------------------------------------------+
+       |                          ^
+       v (stdin)                  | (stdout)
++------+--------------------------+----------------------------------+
+|                     CLI Agent Process                               |
+|  (any language: TypeScript, Python, Go, etc.)                      |
+|                                                                    |
+|  Reads AgentRequest JSON from stdin                                |
+|  Processes request (calls LLM, runs tools, etc.)                   |
+|  Writes AgentResponse JSON to stdout                               |
+|  Errors to stderr (never stdout)                                   |
++-------------------------------------------------------------------+
+```
+
+### 11.2 Agent Protocol (stdin/stdout JSON)
+
+**AgentRequest** (stdin):
+```typescript
+{
+  thread_id: string;        // conversation thread ID
+  run_id: string;           // execution run ID
+  assistant_id: string;     // assistant/agent configuration ID
+  messages: AgentMessage[];  // conversation history + new message
+  documents?: AgentDocument[];  // attached documents
+  metadata?: Record<string, unknown>;
+}
+```
+
+**AgentResponse** (stdout):
+```typescript
+{
+  thread_id: string;
+  run_id: string;
+  messages: AgentMessage[];  // agent response messages
+  metadata?: Record<string, unknown>;
+}
+```
+
+### 11.3 Agent Registry (`agent-registry.yaml`)
+
+Maps assistant `graph_id` values to CLI agent configurations:
+
+```yaml
+agents:
+  passthrough:
+    command: npx
+    args: ["tsx", "agents/passthrough/src/index.ts"]
+    cwd: "."
+    description: "Pass-through test agent"
+    timeout: 60000
+```
+
+### 11.4 Pass-through Test Agent (`agents/passthrough/`)
+
+Isolated TypeScript project using LangChain to forward requests to configurable LLMs.
+
+**File Structure:**
+```
+agents/passthrough/
+  package.json          - Separate dependencies (LangChain providers)
+  tsconfig.json         - Isolated TypeScript config
+  llm-config.yaml       - LLM provider config with named profiles
+  src/
+    index.ts            - CLI entry point (stdin -> agent -> stdout)
+    config.ts           - YAML config loader with ${ENV_VAR} substitution
+    llm-factory.ts      - Creates LangChain chat model from config
+    agent.ts            - Core logic: converts messages, calls LLM
+    types.ts            - AgentRequest/Response type definitions
+```
+
+**Supported Providers:** Azure OpenAI, OpenAI, Anthropic, Google Gemini
+
+### 11.5 Adding a New Agent
+
+1. Create a CLI tool that reads `AgentRequest` JSON from stdin and writes `AgentResponse` JSON to stdout
+2. Add an entry to `agent-registry.yaml` with its `graph_id` and command
+3. Create an assistant via `POST /assistants` with that `graph_id`
+4. Create a thread and run -- the connector will invoke the agent
+
+---
+
 ## Revision History
 
 | Date | Version | Description |
 |------|---------|-------------|
+| 2026-03-10 | 1.2 | Added Section 11: Custom Agent Integration Architecture |
 | 2026-03-08 | 1.0 | Initial technical design created |

@@ -1,0 +1,36 @@
+# LLM Configuration
+# Environment variables can be referenced as ${VAR_NAME}
+# Select the active provider with "provider" and optionally "profile"
+
+provider: azure-openai  # azure-openai | openai | anthropic | google
+profile: default         # named profile within the provider
+
+azure-openai:
+  default:
+    apiKey: ${AZURE_OPENAI_API_KEY}
+    endpoint: ${AZURE_OPENAI_ENDPOINT}
+    deploymentName: ${AZURE_OPENAI_DEPLOYMENT_NAME}
+    apiVersion: "2024-08-01-preview"
+    temperature: 0.7
+    maxTokens: 4096
+
+openai:
+  default:
+    apiKey: ${OPENAI_API_KEY}
+    model: gpt-4o
+    temperature: 0.7
+    maxTokens: 4096
+
+anthropic:
+  default:
+    apiKey: ${ANTHROPIC_API_KEY}
+    model: claude-sonnet-4-20250514
+    temperature: 0.7
+    maxTokens: 4096
+
+google:
+  default:
+    apiKey: ${GOOGLE_API_KEY}
+    model: gemini-2.0-flash
+    temperature: 0.7
+    maxTokens: 4096
