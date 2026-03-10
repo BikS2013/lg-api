@@ -96,3 +96,9 @@ Use the information registered into the docs/reference/investigation-assistant-r
 ### Request 010 
 I want you to change the passthrough agent to return the llm invokation metadata 
 The lg-api must capture these metadata and store them in the thread as response metadata in each message 
+
+### Request 011 
+Currently the thread blob storage, creates a dedicated folder for each thread named after the thread_id 
+inside the thread folder it maintains a state.json file which is the latest thread version, and a history folder where the subsequent versions of the thread are kept 
+I want you to keep the latest version of the thread as a file named after the thread_id and use a folder named after the threadid + "_history" for the versions 
+this will allow us to have all the thread files in the same folder, sort them based on the createtion or update timestamp, etc  
