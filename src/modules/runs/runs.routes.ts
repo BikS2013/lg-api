@@ -51,6 +51,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: RunCreateRequest;
   }>('/threads/:thread_id/runs', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Create and execute a run on a thread',
+      description: `Creates and executes a new **stateful** run on an existing thread. A run invokes an assistant's graph with specific input within the context of a thread's accumulated state. This is the primary endpoint for multi-turn agent interactions.
+
+In the LangGraph Platform, stateful runs load the thread's current state, execute the graph, update the thread with results, and create checkpoints. Key parameters: \`assistant_id\` (required), \`input\`, \`config\`, \`metadata\`, and \`multitask_strategy\` ("reject", "enqueue", "interrupt").
+
+Execution is asynchronous by default. Use POST /threads/:thread_id/runs/wait for synchronous behavior or POST /threads/:thread_id/runs/stream for real-time SSE updates.`,
       params: ThreadIdOnlyParamSchema,
       body: RunCreateRequestSchema,
       response: { 200: RunSchema },
@@ -68,6 +75,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: RunCreateRequest;
   }>('/runs', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Create and execute a stateless run (no thread)',
+      description: `Creates and executes a **stateless** run without a thread. Stateless runs are ephemeral: they do not persist state before or after execution. Each stateless run is fully independent.
+
+In the LangGraph Platform, stateless runs are used for one-off requests, batch processing, and exposing agents as pure functions (input to output) without session management. A temporary thread is created internally, the run executes, and the thread is discarded after completion.
+
+Key parameters include \`assistant_id\` (required) and \`input\` (required). Stateless runs are faster to initialize (no state loading) and support unlimited parallelism.`,
       body: RunCreateRequestSchema,
       response: { 200: RunSchema },
     },
@@ -84,6 +98,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: RunCreateRequest;
   }>('/threads/:thread_id/runs/stream', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Create and stream a stateful run via SSE',
+      description: `Creates a new run on a thread and streams execution events in real-time using Server-Sent Events (SSE). This is the streaming variant of POST /threads/:thread_id/runs.
+
+In the LangGraph Platform, streaming enables real-time UIs where users see agent progress as it happens. The \`stream_mode\` parameter controls event granularity: **values** emits full state after each node, **messages** emits incremental LLM tokens for typewriter effect, **events** emits lifecycle events, and **debug** emits all internal events.
+
+The connection remains open until the run completes or the client disconnects. Response uses Content-Type \`text/event-stream\` with typed events including \`metadata\`, \`values\`, \`messages/partial\`, \`error\`, and \`end\`.`,
       params: ThreadIdOnlyParamSchema,
       body: RunCreateRequestSchema,
     },
@@ -100,6 +121,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: RunCreateRequest;
   }>('/runs/stream', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Create and stream a stateless run via SSE',
+      description: `Creates a **stateless** run (no thread) and streams execution events in real-time using Server-Sent Events (SSE). This is the streaming variant of POST /runs.
+
+In the LangGraph Platform, stateless streaming is used for one-off agent requests where you want real-time updates but don't need persistent state. A temporary thread is created, used for the run, and discarded after completion. All \`stream_mode\` options (values, messages, events, debug) are supported.
+
+Stateless streaming runs are fully independent with no state accumulation. Lower latency than stateful streaming due to no state loading overhead. Response format is identical to POST /threads/:thread_id/runs/stream.`,
       body: RunCreateRequestSchema,
     },
   }, async (request, reply) => {
@@ -115,6 +143,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: RunCreateRequest;
   }>('/threads/:thread_id/runs/wait', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Create a stateful run and wait for completion',
+      description: `Creates a new run on a thread and blocks until execution completes. This is the synchronous variant of POST /threads/:thread_id/runs, useful when you need the final result immediately without streaming.
+
+In the LangGraph Platform, the "wait" endpoints provide a request-response programming model: send input, wait for processing, receive output. The HTTP connection remains open while the run executes, and the response is sent only after the run reaches a terminal status (**success**, **error**, or **interrupted**).
+
+Long-running runs may timeout based on HTTP client/server timeout settings. If the client disconnects, the run continues in the background. Use POST /threads/:thread_id/runs/:run_id/cancel to stop it.`,
       params: ThreadIdOnlyParamSchema,
       body: RunCreateRequestSchema,
       response: { 200: RunWaitResponseSchema },
@@ -132,6 +167,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: RunCreateRequest;
   }>('/runs/wait', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Create a stateless run and wait for completion',
+      description: `Creates a **stateless** run (no thread) and blocks until execution completes. This is the synchronous variant of POST /runs, providing the simplest way to invoke an agent: send input, get output.
+
+In the LangGraph Platform, stateless wait provides a pure request-response model. A temporary thread is created, the run executes, the response is returned, and the thread is discarded. No state persists after the response.
+
+This is the simplest programming model: pure input/output with no follow-up queries to thread state. Lower latency than stateful wait (no state loading) but cannot resume conversations.`,
       body: RunCreateRequestSchema,
       response: { 200: RunWaitResponseSchema },
     },
@@ -147,6 +189,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: RunCreateRequest[];
   }>('/runs/batch', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Create multiple stateless runs in a single request',
+      description: `Creates multiple **stateless** runs in a single batch request. This endpoint is optimized for bulk processing where you need to run the same or different assistants on many independent inputs.
+
+In the LangGraph Platform, batch runs are executed in parallel on available queue workers, making this significantly faster than creating runs sequentially. All runs are stateless (temporary threads, no state persistence) and independent: one failure does not affect others.
+
+The request returns immediately with run objects in "pending" status. Use GET /threads/:thread_id/runs/:run_id to poll individual run results after completion.`,
       body: RunBatchRequestSchema,
       response: { 200: Type.Array(RunSchema) },
     },
@@ -163,6 +212,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Querystring: ListRunsQuery;
   }>('/threads/:thread_id/runs', {
     schema: {
+      tags: ['Runs'],
+      summary: 'List all runs for a thread',
+      description: `Retrieves a list of all runs that have been executed on a specific thread. Supports pagination via \`limit\` and \`offset\` query parameters, and filtering by \`status\`.
+
+In the LangGraph Platform, threads accumulate runs over time. The runs list provides a chronological view of all agent invocations on a thread, useful for audit trails, debugging, and conversation history. Runs are returned in reverse chronological order (newest first).
+
+Stateless runs do not appear in this listing as they have no persistent thread. Pagination headers are included in the response for navigating large result sets.`,
       params: ThreadIdOnlyParamSchema,
       querystring: ListRunsQuerySchema,
       response: { 200: Type.Array(RunSchema) },
@@ -181,6 +237,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Params: RunIdParams;
   }>('/threads/:thread_id/runs/:run_id', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Retrieve a specific run by ID',
+      description: `Retrieves the full details of a specific run, including its current status, configuration, and timestamps. Useful for polling run status, retrieving results after background execution, or debugging failures.
+
+In the LangGraph Platform, run status progresses through: **pending** (queued), **running** (executing), and a terminal state of **success**, **error**, **interrupted**, or **cancelled**. The response includes \`run_id\`, \`thread_id\`, \`assistant_id\`, \`status\`, \`created_at\`, \`started_at\`, and \`ended_at\`.
+
+Returns 404 if the run or thread does not exist.`,
       params: RunIdParamSchema,
       response: { 200: RunSchema },
     },
@@ -198,6 +261,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: CancelRunRequest;
   }>('/threads/:thread_id/runs/:run_id/cancel', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Cancel an in-progress run',
+      description: `Cancels a running or pending run on a thread. The run is terminated gracefully: any in-progress work is finalized and the run status is set to "cancelled".
+
+In the LangGraph Platform, if the run is **pending** it is removed from the queue. If **running**, the worker is signaled to stop at the next checkpoint boundary and partial state is saved. If already completed, the request succeeds with no effect (idempotent). The thread remains in a valid state and can accept new runs after cancellation.
+
+Cancellation is asynchronous: the response is immediate but the run may take a few seconds to fully stop. Returns 204 on success, 404 if run or thread does not exist.`,
       params: RunIdParamSchema,
       body: CancelRunRequestSchema,
     },
@@ -214,6 +284,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Body: BulkCancelRunsRequest;
   }>('/runs/cancel', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Cancel multiple runs by filter',
+      description: `Cancels multiple runs matching specified filters in a single request. This is the bulk variant of POST /threads/:thread_id/runs/:run_id/cancel.
+
+In the LangGraph Platform, bulk cancellation supports filters such as \`status\`, \`metadata\`, \`thread_id\`, and \`assistant_id\`. A \`limit\` parameter prevents accidental mass cancellation. Use cases include emergency stop of all running runs, cancelling runs for a specific user via metadata, or cleaning up pending runs before maintenance.
+
+Cancellation is asynchronous and eventual. Already completed runs are not affected. Use with caution as bulk cancellation can disrupt production workloads.`,
       body: BulkCancelRunsRequestSchema,
     },
   }, async (request, reply) => {
@@ -228,6 +305,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Params: RunIdParams;
   }>('/threads/:thread_id/runs/:run_id/join', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Wait for an existing run to complete',
+      description: `Blocks and waits for an already-created run to reach a terminal status (**success**, **error**, **interrupted**, or **cancelled**). This is the "wait after create" pattern, useful when you create a run asynchronously and later want its result synchronously.
+
+In the LangGraph Platform, the join operation complements asynchronous run creation. If the run is already completed, the response is immediate. If pending or running, the HTTP connection blocks until completion. This enables workflows like: start multiple runs in parallel, then join each to collect results.
+
+Subject to HTTP timeout limits. If the run never completes, the join request hangs until timeout. For real-time updates, use streaming endpoints instead. Returns 404 if run or thread does not exist.`,
       params: RunIdParamSchema,
       response: { 200: RunSchema },
     },
@@ -245,6 +329,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Querystring: JoinStreamQuery;
   }>('/threads/:thread_id/runs/:run_id/stream', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Join an existing run\'s SSE stream',
+      description: `Connects to the SSE stream of an already-running run. This enables clients to reconnect after disconnection or to "join" a run started by another client. Supports resumability via the \`Last-Event-ID\` header.
+
+In the LangGraph Platform, SSE streams are resumable. If the run is still executing, events are streamed in real-time. If completed, the final events are sent and the stream closes. If pending, the stream waits until execution begins. The \`stream_mode\` query parameter can override the original stream mode.
+
+Use cases include reconnecting after network interruption, multiple viewers monitoring the same run, and delayed join where a user navigates away and returns later. Returns 404 if run or thread does not exist.`,
       params: RunIdParamSchema,
       querystring: JoinStreamQuerySchema,
     },
@@ -271,6 +362,13 @@ export default async function registerRunRoutes(fastify: FastifyInstance): Promi
     Params: RunIdParams;
   }>('/threads/:thread_id/runs/:run_id', {
     schema: {
+      tags: ['Runs'],
+      summary: 'Delete a run record',
+      description: `Permanently deletes a run record and its associated metadata. This does not affect the thread's state (which was already updated by the run), only the run record itself.
+
+In the LangGraph Platform, run deletion is used for audit log cleanup, privacy compliance (removing runs with sensitive data), and test cleanup after CI. The run record is permanently and irreversibly deleted, and will no longer appear in GET /threads/:thread_id/runs listings.
+
+Active runs should be cancelled before deletion. Deleting a run does not revert thread state; use checkpoint rollback for that. Returns 204 on success, 404 if run does not exist.`,
       params: RunIdParamSchema,
     },
   }, async (request, reply) => {

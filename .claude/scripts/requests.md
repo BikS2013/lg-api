@@ -77,3 +77,7 @@ I want you to enhance the lg-api interface with the agents to exchange a state o
         }
 The state object must exist in both the input and output messages. 
 
+### Request 008 
+I want you to update the swagger to explain for each endpoint how is used, for which purpose. 
+make the descriptions as informative as possible 
+use content and information from the internet and from the official langgraph site

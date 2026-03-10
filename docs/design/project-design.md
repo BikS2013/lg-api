@@ -3151,5 +3151,57 @@ agents/passthrough/
 
 | Date | Version | Description |
 |------|---------|-------------|
+| 2026-03-10 | 1.3 | Added Section 12: Swagger Endpoint Descriptions Enhancement |
 | 2026-03-10 | 1.2 | Added Section 11: Custom Agent Integration Architecture |
 | 2026-03-08 | 1.0 | Initial technical design created |
+
+---
+
+## 12. Swagger Endpoint Descriptions Enhancement
+
+**Design Document:** `docs/design/design-003-swagger-endpoint-descriptions.md`
+**Plan:** `docs/design/plan-003-swagger-endpoint-descriptions.md`
+**Content Source:** `docs/reference/investigation-swagger-endpoint-descriptions.md`
+
+### 12.1 Overview
+
+A documentation-only enhancement that adds comprehensive Swagger/OpenAPI metadata (`tags`, `summary`, `description`) to all 50 lg-api endpoints. The goal is to make the Swagger UI (`/docs`) a self-contained developer reference aligned with official LangGraph Platform documentation. No business logic, schema, or handler changes are involved.
+
+### 12.2 Scope
+
+| Module | File | Endpoints | Change |
+|--------|------|-----------|--------|
+| Swagger Plugin | `src/plugins/swagger.plugin.ts` | N/A | Add `tags` array with 6 tag group descriptions |
+| Assistants | `src/modules/assistants/assistants.routes.ts` | 11 | Add `tags`, `summary`, `description` |
+| Threads | `src/modules/threads/threads.routes.ts` | 12 | Add `tags`, `summary`, `description` |
+| Runs | `src/modules/runs/runs.routes.ts` | 14 | Add `tags`, `summary`, `description` |
+| Crons | `src/modules/crons/crons.routes.ts` | 6 | Add `description` only (tags/summary exist) |
+| Store | `src/modules/store/store.routes.ts` | 5 | Add `description` only (tags/summary exist) |
+| System | `src/modules/system/system.routes.ts` | 2 | Add `description` only (tags/summary exist) |
+
+### 12.3 Route Schema Patterns
+
+Two route registration patterns exist in the codebase. Both place swagger metadata as top-level keys inside the `schema` object:
+
+- **Pattern A** (`fastify.route({...})`): Used by Assistants and Threads routes. Metadata keys (`tags`, `summary`, `description`) are added as the first entries inside the `schema` object, before `params`, `body`, and `response`.
+
+- **Pattern B** (`fastify.<method>(url, {schema}, handler)`): Used by Runs, Crons, Store, and System routes. Same placement of metadata keys inside `schema`.
+
+### 12.4 Description Format
+
+- All descriptions use ES6 template literals (backtick strings) for multi-line content.
+- Descriptions are 3-8 sentences, structured as: purpose statement, LangGraph context, usage/behavioral notes.
+- Conservative Markdown usage: bold for emphasis, inline code for field names, bullet lists for enumerations. No tables, code blocks, or headers within descriptions.
+- Description content is sourced from the investigation document and adapted (condensed, tables/code blocks removed) for Swagger UI rendering.
+
+### 12.5 Technical Safety
+
+The `tags`, `summary`, and `description` fields are OpenAPI operation metadata extracted by `@fastify/swagger` but **not** passed to Ajv for validation. Adding these fields has no effect on request validation, response serialization, or handler execution. This is confirmed by Fastify's swagger plugin architecture, which separates OpenAPI metadata from schema validation keys.
+
+### 12.6 Verification
+
+- TypeScript compilation (`npm run build`) must succeed after each unit.
+- Server startup (`npm run dev`) must complete without errors.
+- Swagger UI (`/docs`) must render all 50 endpoints with tags, summaries, and descriptions.
+- Full test suite (`npm test`) must pass without modification.
+- All 6 tag groups must display descriptions in the Swagger UI sidebar.

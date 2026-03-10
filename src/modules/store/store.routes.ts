@@ -37,6 +37,9 @@ const storeRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     schema: {
       tags: ['Store'],
       summary: 'Put (create or update) an item in the store',
+      description: `Creates or updates a key-value item in the cross-thread store. The store provides persistent memory that can be shared across threads, scoped by hierarchical namespace paths. Each item is identified by a **namespace** (array of string segments) and a **key** within that namespace.
+
+If an item with the same namespace and key already exists, it is overwritten; otherwise a new item is created. Namespaces are created implicitly and do not need to be pre-created. Common use cases include storing user preferences, shared knowledge, and cross-session memory.`,
       body: PutItemRequestSchema,
       response: {
         200: ItemSchema,
@@ -62,6 +65,9 @@ const storeRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     schema: {
       tags: ['Store'],
       summary: 'Get an item from the store by namespace and key',
+      description: `Retrieves a single item from the store by its **namespace** and **key**, passed as query parameters. This is the read counterpart to \`PUT /store/items\`.
+
+The response includes the full namespace, key, and value of the item. If the item does not exist, a 404 error is returned. Use this endpoint to load persisted data such as user preferences, shared knowledge, or per-thread metadata into graph execution context.`,
       querystring: GetItemQuerySchema,
       response: {
         200: ItemSchema,
@@ -95,6 +101,9 @@ const storeRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     schema: {
       tags: ['Store'],
       summary: 'Delete an item from the store',
+      description: `Permanently deletes a single item from the store by **namespace** and **key**. This operation is irreversible.
+
+The delete operation is idempotent: if the item does not exist, the request still succeeds with a 204 response. Deletion does not support wildcard or recursive removal; items must be deleted individually. Common use cases include user data removal for GDPR/CCPA compliance, cache invalidation, and cleanup of obsolete entries.`,
       body: DeleteItemRequestSchema,
       response: {
         204: Type.Null(),
@@ -112,6 +121,9 @@ const storeRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     schema: {
       tags: ['Store'],
       summary: 'Search items in the store',
+      description: `Searches for store items matching specified filters. Supports **namespace prefix** matching, metadata filtering, and pagination via \`limit\` and \`offset\` parameters.
+
+Namespace prefix matching is hierarchical: a prefix of \`["users"]\` matches items under \`["users", "u123"]\` and \`["users", "u456", "prefs"]\`. An empty prefix matches all items. Use this endpoint to list all items within a namespace, discover stored data, or find items by metadata tags.`,
       body: SearchItemsRequestSchema,
       response: {
         200: Type.Array(SearchItemSchema),
@@ -139,6 +151,9 @@ const storeRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     schema: {
       tags: ['Store'],
       summary: 'List namespaces in the store',
+      description: `Lists all unique namespace paths in the store, optionally filtered by a parent prefix. This enables hierarchical navigation and discovery of the store's namespace structure.
+
+The **max_depth** parameter controls how many levels of hierarchy to return. Namespaces are derived from stored items; empty namespaces with no items are not returned. Use this endpoint to discover what namespaces exist, build folder-like navigation UIs, or audit stored data across users and organizations.`,
       body: ListNamespacesRequestSchema,
       response: {
         200: ListNamespacesResponseSchema,
