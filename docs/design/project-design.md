@@ -3205,3 +3205,105 @@ The `tags`, `summary`, and `description` fields are OpenAPI operation metadata e
 - Swagger UI (`/docs`) must render all 50 endpoints with tags, summaries, and descriptions.
 - Full test suite (`npm test`) must pass without modification.
 - All 6 tag groups must display descriptions in the Swagger UI sidebar.
+
+---
+
+## 13. Agent-Assistant Integration Architecture
+
+**Design Document:** `docs/design/design-004-agent-assistant-integration.md`
+**Requirements:** `docs/reference/refined-request-agent-assistant-integration.md`
+**Plan:** `docs/design/plan-004-agent-assistant-integration.md`
+**Date Added:** 2026-03-10
+
+### 13.1 Overview
+
+The agent-assistant integration wires the existing but unused agent system (`src/agents/`) into the run execution pipeline (`src/modules/runs/`), replacing all hardcoded stub responses with real agent execution. It introduces:
+
+1. **Polymorphic agent connectors** (CLI + HTTP API) via a Strategy pattern with discriminated union types
+2. **Auto-registration** of default assistants from `agent-registry.yaml` on server startup
+3. **graph_id aliasing** allowing `assistant_id` in run creation to be either a UUID or a graph_id string
+4. **End-to-end run pipeline** from request to agent execution to thread state persistence to SSE streaming
+
+### 13.2 Agent System Component Architecture
+
+```
+src/agents/
+  types.ts                              -- AgentConfig discriminated union
+  agent-registry.ts                     -- Polymorphic YAML loader
+  agent-executor.ts                     -- Central orchestrator
+  assistant-resolver.ts                 -- UUID/graph_id resolution
+  assistant-auto-register.ts            -- Startup auto-registration
+  request-composer.ts                   -- Unchanged (builds AgentRequest from thread state)
+  connectors/
+    agent-connector.interface.ts        -- IAgentConnector interface
+    cli-connector.ts                    -- CLI child process connector
+    api-connector.ts                    -- HTTP API connector
+    connector-factory.ts                -- Type-based connector selection
+```
+
+### 13.3 Type System
+
+The `AgentConfig` type is refactored from a flat interface to a discriminated union:
+
+- `BaseAgentConfig` -- shared fields: `type`, `name?`, `description?`, `timeout`
+- `CliAgentConfig` extends `BaseAgentConfig` with `type: 'cli'`, `command`, `args`, `cwd`
+- `ApiAgentConfig` extends `BaseAgentConfig` with `type: 'api'`, `url`, `method`, `headers`
+- `AgentConfig = CliAgentConfig | ApiAgentConfig`
+
+The `type` field serves as the discriminator for both YAML parsing and connector selection.
+
+### 13.4 Connector Strategy Pattern
+
+```
+AgentExecutor
+  |
+  +---> AgentRegistry.getAgentConfig(graphId)  -- returns AgentConfig
+  |
+  +---> ConnectorFactory.getConnector(config.type)
+          |
+          +---> case 'cli': CliAgentConnector   (child_process.spawn, stdin/stdout JSON)
+          +---> case 'api': ApiAgentConnector    (native fetch, JSON request/response)
+```
+
+Both connectors implement `IAgentConnector`:
+- `execute(config, request): Promise<AgentResponse>` -- synchronous full response
+- `stream(config, request): AsyncGenerator<AgentStreamEvent>` -- SSE event sequence
+
+### 13.5 Run Execution Pipeline
+
+The `RunsService` is extended with four new dependencies: `AgentExecutor`, `AssistantResolver`, `RequestComposer`, and `IThreadStorage`. The execution flow for all run modes follows:
+
+1. **AssistantResolver.resolve(assistant_id)** -- UUID lookup, then graph_id fallback
+2. **RequestComposer.composeRequest()** -- builds AgentRequest from thread state + input
+3. **AgentExecutor.execute/stream(graph_id, request)** -- registry lookup + connector dispatch
+4. **Thread state update** -- appends messages to thread state via `threadStorage.addState()`
+5. **Status transitions** -- run: pending -> running -> success/error; thread: idle -> busy -> idle/error
+
+### 13.6 Auto-Registration
+
+On server startup, after `initializeStorage()` and before route registration:
+
+1. Load `agent-registry.yaml` via `AgentRegistry`
+2. For each registered graph_id, search assistant storage for existing match
+3. If none found: create a default assistant with `metadata.auto_registered: true`
+4. If found: skip (idempotent)
+5. Errors per agent are logged but do not block other registrations or server startup
+
+### 13.7 Schema Relaxation
+
+`RunCreateRequestSchema.assistant_id` is changed from `Type.String({ format: 'uuid' })` to `Type.String()` to accept both UUID and graph_id values. The `RunSchema` entity retains UUID format since actual run records always store the resolved assistant UUID.
+
+### 13.8 Agent System Singletons
+
+The agent system singletons (`AgentExecutor`, `AssistantResolver`, `RequestComposer`) are initialized in `src/repositories/registry.ts` via `initializeAgentSystem()` and exposed through getter functions (`getAgentExecutor()`, `getAssistantResolver()`, `getRequestComposer()`), following the same pattern as `getStorageProvider()`.
+
+### 13.9 Implementation Units
+
+| Unit | Files | Dependencies | Parallelizable |
+|------|-------|-------------|----------------|
+| A: Types + Interfaces | `types.ts`, `agent-registry.ts`, `agent-connector.interface.ts`, `agent-registry.yaml` | None | Start first |
+| B: Connectors | `cli-connector.ts`, `api-connector.ts`, `connector-factory.ts`, `agent-executor.ts` | Unit A | Yes (parallel with C) |
+| C: Auto-Registration | `assistant-resolver.ts`, `assistant-auto-register.ts`, `run.schema.ts`, `app.ts` | Unit A | Yes (parallel with B) |
+| D: Pipeline Wiring | `runs.service.ts`, `runs.streaming.ts`, `runs.routes.ts`, `registry.ts` | Units A+B+C | Sequential |
+
+No file appears in more than one unit, enabling true parallel development of Units B and C after Unit A completes.

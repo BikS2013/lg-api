@@ -453,10 +453,113 @@ The system must support integration with custom agents implemented as isolated C
 
 ---
 
+## FR-18: Agent-Assistant Integration
+
+The system must integrate the agent system with the assistant and run execution pipeline, enabling real agent invocation instead of stub responses.
+
+### FR-18.1: Auto-Registration of Default Assistants on Startup
+
+On server startup, after storage initialization and before the HTTP server starts accepting requests, the system must:
+- Load `agent-registry.yaml` via the existing `AgentRegistry`
+- For each registered agent (keyed by `graph_id`), search assistant storage for an existing assistant with that `graph_id`
+- If no assistant exists: create a new assistant with `graph_id`, `name` (from agent config or agent key), `description`, and `metadata: { auto_registered: true, agent_type, agent_config }`
+- If an assistant already exists: do nothing (idempotent)
+- Errors during one agent's registration must not prevent remaining agents from being registered
+- Logging: INFO for new creations, DEBUG for existing, ERROR for failures
+
+### FR-18.2: Polymorphic Agent Type Support
+
+The `agent-registry.yaml` must support multiple agent transport types via a `type` discriminator field:
+
+| Type | Transport | Required Fields | Optional Fields |
+|------|-----------|----------------|-----------------|
+| `cli` | Child process (stdin/stdout JSON) | `command` | `args`, `cwd`, `timeout` |
+| `api` | HTTP request/response | `url` | `method`, `headers`, `timeout` |
+
+Common fields for all types: `type`, `name`, `description`, `timeout`.
+
+**Backward Compatibility:** If `type` is omitted, it defaults to `"cli"`.
+
+The `AgentConfig` TypeScript type must be refactored into a discriminated union: `CliAgentConfig | ApiAgentConfig`, with a `BaseAgentConfig` base interface containing shared fields.
+
+### FR-18.3: Agent Configuration Stored in Assistant Metadata
+
+When a default assistant is auto-registered, the agent's transport configuration must be stored in `metadata.agent_config`. Sensitive values (auth headers, API keys) must be redacted when stored (replaced with `***`). Actual values are resolved at runtime from the agent registry.
+
+### FR-18.4: Graph ID Aliasing in Run Creation
+
+The `assistant_id` field in all run creation endpoints must support both:
+1. **Standard UUID** -- direct assistant lookup
+2. **Graph ID string** -- resolved to the default assistant for that graph
+
+Resolution logic:
+1. Try UUID lookup (`getById`)
+2. If not found, search by `graph_id` with `metadata.auto_registered: true`
+3. If multiple matches: use earliest `created_at`
+4. If no match: return HTTP 404
+
+Affected endpoints: `POST /threads/:id/runs`, `POST /runs`, `POST /threads/:id/runs/stream`, `POST /runs/stream`, `POST /threads/:id/runs/wait`, `POST /runs/wait`, `POST /runs/batch`.
+
+The `assistant_id` field in `RunCreateRequestSchema` must be relaxed from `Type.String({ format: 'uuid' })` to `Type.String()`.
+
+### FR-18.5: Run Execution Pipeline Wiring
+
+The run execution pipeline must be wired end-to-end:
+1. **Assistant Lookup:** Resolve `assistant_id` to an assistant entity (using FR-18.4 aliasing)
+2. **Agent Resolution:** From the assistant's `graph_id`, look up agent config in `AgentRegistry`
+3. **Connector Selection:** Based on `agent.type`, select `CliAgentConnector` or `ApiAgentConnector` (Strategy pattern)
+4. **Request Composition:** Use `RequestComposer` to build `AgentRequest` from thread state + run input
+5. **Agent Execution:** Invoke the connector (`executeAgent` for sync, `streamAgent` for SSE)
+6. **Response Handling:** Append agent response messages to thread state, update run status to `success`/`error`, set thread status to `idle`
+
+The `IAgentConnector` interface:
+```
+executeAgent(config: AgentConfig, request: AgentRequest): Promise<AgentResponse>
+streamAgent(config: AgentConfig, request: AgentRequest): AsyncGenerator<AgentStreamEvent>
+```
+
+A `ConnectorFactory` selects the connector based on `config.type`. An `AgentExecutor` orchestrates registry lookup + connector selection + execution.
+
+### FR-18.6: API Agent Connector
+
+A new `ApiAgentConnector` class that communicates with agents via HTTP:
+- Sends HTTP request to the agent's `url` with `AgentRequest` as JSON body
+- Uses configured `method` and `headers`
+- Implements timeout via `AbortSignal.timeout()`
+- Parses response body as `AgentResponse` JSON
+- Error handling: HTTP 4xx/5xx -> `ApiError(502)`, timeout -> `ApiError(504)`, network error -> `ApiError(502)`, invalid JSON -> parse error
+- For streaming: executes synchronously and wraps response into `AgentStreamEvent` sequence (no SSE from agent in this phase)
+
+### FR-18.7: Thread State Update After Agent Execution
+
+After agent execution completes:
+1. Get current thread state from storage
+2. Extract existing messages from `state.values.messages`
+3. Construct new user message from input
+4. Append agent response messages (mapped to LangGraph `ai`/`human` types)
+5. Build new `ThreadState` with checkpoint, parent_checkpoint chain
+6. Persist via `threadStorage.addState(threadId, newState)`
+7. Update thread `values` for quick access
+
+This enables conversation continuity across runs, with the `RequestComposer` reading history from `state.values.messages`.
+
+### FR-18.8: Non-Functional Requirements
+
+| NFR | Description |
+|-----|-------------|
+| Startup Performance | Auto-registration must complete within 2 seconds for up to 50 agents |
+| Idempotency | Multiple restarts must not create duplicate assistants |
+| Error Isolation | One agent registration failure must not block server startup |
+| Backward Compatibility | Existing `agent-registry.yaml` without `type` field must work; existing API signatures unchanged |
+| No New Dependencies | API connector uses native `fetch` (Node.js 18+), no npm packages added |
+
+---
+
 ## Revision History
 
 | Date | Version | Description |
 |------|---------|-------------|
+| 2026-03-10 | 1.3 | Added FR-18 (Agent-Assistant Integration) with sub-requirements FR-18.1 through FR-18.8 |
 | 2026-03-10 | 1.2 | Added FR-17 (Custom Agent Integration) with sub-requirements FR-17.1 through FR-17.6 |
 | 2026-03-09 | 1.1 | Added FR-15 (Pluggable Storage Infrastructure) and FR-16 (Extended Configuration Management) |
 | 2026-03-08 | 1.0 | Initial functional requirements extracted from refined request specification |

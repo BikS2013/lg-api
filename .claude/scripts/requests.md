@@ -81,3 +81,13 @@ The state object must exist in both the input and output messages.
 I want you to update the swagger to explain for each endpoint how is used, for which purpose. 
 make the descriptions as informative as possible 
 use content and information from the internet and from the official langgraph site
+
+
+### Request 009 
+I consider the following changes:
+1. On startup: Read agent-registry.yaml → for each agent, create a default assistant (if it does not already exist) with graph_id matching the agent key. You must possibly introduce an agent key in the agent-registry.yaml, if one doesn't exist yet.
+2. The agent/assistant might be a command-line interface implementation or an API implementation. In the future, we might introduce additional options, like an in-process drop-in agent/assistant.
+3. The agent-registry.yaml must bear all the necessary information to make the agent usable e.g. command line instructions, api url, etc.
+4. The same instructions might be registered in the assistant's entry into the storage
+5. On run execution: Wire the actual pipeline: assistant lookup → graph_id → agent registry → CLI connector → agent execution → SSE streaming
+Use the information registered into the docs/reference/investigation-assistant-registration.md to evaluate my proposal, and finalize a proposal to allow the actual integration between the lg-api and the agents.

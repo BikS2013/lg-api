@@ -2,22 +2,30 @@
  * Agent Registry
  *
  * Loads agent definitions from agent-registry.yaml and provides
- * lookup by graph_id. Each entry maps a graph_id to the CLI command,
- * arguments, working directory, and timeout for the agent process.
+ * lookup by graph_id. Each entry maps a graph_id to the agent
+ * configuration which can be either a CLI command or an API endpoint.
  */
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import type { AgentConfig } from './types.js';
+import type { AgentConfig, CliAgentConfig, ApiAgentConfig } from './types.js';
 
 /**
  * Raw shape of a single agent entry in agent-registry.yaml.
+ * Supports both CLI and API agent types.
  */
 interface RawAgentEntry {
-  command: string;
+  type?: string;
+  // CLI fields
+  command?: string;
   args?: string[];
   cwd?: string;
+  // API fields
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  // Common fields
   timeout?: number;
   description?: string;
 }
@@ -63,6 +71,13 @@ export class AgentRegistry {
    */
   getRegisteredGraphIds(): string[] {
     return Array.from(this.agents.keys());
+  }
+
+  /**
+   * Return a Map of all registered agents keyed by graph_id.
+   */
+  getRegisteredAgents(): Map<string, AgentConfig> {
+    return new Map(this.agents);
   }
 
   /**
@@ -126,8 +141,31 @@ export class AgentRegistry {
 
   /**
    * Validate a raw agent entry and register it.
+   * Defaults type to 'cli' if not specified (backward compatibility).
    */
   private validateAndRegister(
+    graphId: string,
+    entry: RawAgentEntry,
+    configPath: string,
+  ): void {
+    const agentType = entry.type ?? 'cli';
+
+    if (agentType === 'cli') {
+      this.validateAndRegisterCli(graphId, entry, configPath);
+    } else if (agentType === 'api') {
+      this.validateAndRegisterApi(graphId, entry, configPath);
+    } else {
+      throw new Error(
+        `Agent "${graphId}" in ${configPath} has unsupported type: "${agentType}". ` +
+        `Supported types: cli, api`,
+      );
+    }
+  }
+
+  /**
+   * Validate and register a CLI agent entry.
+   */
+  private validateAndRegisterCli(
     graphId: string,
     entry: RawAgentEntry,
     configPath: string,
@@ -138,10 +176,37 @@ export class AgentRegistry {
       );
     }
 
-    const config: AgentConfig = {
+    const config: CliAgentConfig = {
+      type: 'cli',
       command: entry.command,
       args: entry.args ?? [],
       cwd: entry.cwd ?? '.',
+      timeout: entry.timeout ?? 60000,
+      description: entry.description,
+    };
+
+    this.agents.set(graphId, config);
+  }
+
+  /**
+   * Validate and register an API agent entry.
+   */
+  private validateAndRegisterApi(
+    graphId: string,
+    entry: RawAgentEntry,
+    configPath: string,
+  ): void {
+    if (!entry.url || typeof entry.url !== 'string') {
+      throw new Error(
+        `Agent "${graphId}" in ${configPath} is missing required field: url`,
+      );
+    }
+
+    const config: ApiAgentConfig = {
+      type: 'api',
+      url: entry.url,
+      method: entry.method ?? 'POST',
+      headers: entry.headers,
       timeout: entry.timeout ?? 60000,
       description: entry.description,
     };

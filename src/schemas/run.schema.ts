@@ -22,7 +22,7 @@ export const RunSchema = Type.Object({
 
 // --- Run Create Request (shared body for stateful + stateless runs) ---
 export const RunCreateRequestSchema = Type.Object({
-  assistant_id: Type.String({ format: 'uuid' }),
+  assistant_id: Type.String({ description: 'Assistant ID (UUID) or graph_id string' }),
   input: Type.Optional(Type.Union([
     Type.Record(Type.String(), Type.Unknown()),
     Type.Null(),

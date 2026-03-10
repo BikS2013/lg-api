@@ -2,7 +2,7 @@
  * CLI Agent Connector
  *
  * Executes custom agents as CLI child processes. The connector:
- * 1. Looks up the agent command from the AgentRegistry using graph_id
+ * 1. Receives the agent configuration directly (config is resolved externally)
  * 2. Spawns the CLI process
  * 3. Writes the AgentRequest as JSON to stdin
  * 4. Reads the AgentResponse as JSON from stdout
@@ -11,25 +11,20 @@
  * 7. Returns the parsed AgentResponse
  *
  * For streaming, the connector executes the agent synchronously and
- * then emits the response as SSE-compatible AgentStreamEvents.
+ * then emits the response as SSE-compatible StreamEvents.
  */
 
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
-import { AgentRegistry } from './agent-registry.js';
+import type { IAgentConnector } from './connectors/agent-connector.interface.js';
 import type {
+  AgentConfig,
   AgentRequest,
   AgentResponse,
-  AgentStreamEvent,
+  StreamEvent,
 } from './types.js';
 
-export class CliAgentConnector {
-  private registry: AgentRegistry;
-
-  constructor(registry: AgentRegistry) {
-    this.registry = registry;
-  }
-
+export class CliAgentConnector implements IAgentConnector {
   /**
    * Execute a CLI agent with the given request.
    *
@@ -37,12 +32,10 @@ export class CliAgentConnector {
    * the response from stdout. Throws on timeout, non-zero exit code,
    * or unparseable output.
    */
-  async executeAgent(graphId: string, request: AgentRequest): Promise<AgentResponse> {
-    const config = this.registry.getAgentConfig(graphId);
-    if (!config) {
+  async execute(config: AgentConfig, request: AgentRequest): Promise<AgentResponse> {
+    if (config.type !== 'cli') {
       throw new Error(
-        `No agent registered for graph_id "${graphId}". ` +
-        `Registered agents: ${this.registry.getRegisteredGraphIds().join(', ') || '(none)'}`,
+        `CliAgentConnector received config with type "${config.type}", expected "cli"`,
       );
     }
 
@@ -82,7 +75,7 @@ export class CliAgentConnector {
         if (timedOut) {
           rejectPromise(
             new Error(
-              `Agent "${graphId}" timed out after ${config.timeout}ms. ` +
+              `CLI agent timed out after ${config.timeout}ms. ` +
               `stderr: ${stderr.trim() || '(empty)'}`,
             ),
           );
@@ -92,7 +85,7 @@ export class CliAgentConnector {
         if (code !== 0) {
           rejectPromise(
             new Error(
-              `Agent "${graphId}" exited with code ${code}. ` +
+              `CLI agent exited with code ${code}. ` +
               `stderr: ${stderr.trim() || '(empty)'}`,
             ),
           );
@@ -106,7 +99,7 @@ export class CliAgentConnector {
         } catch {
           rejectPromise(
             new Error(
-              `Agent "${graphId}" returned invalid JSON on stdout. ` +
+              `CLI agent returned invalid JSON on stdout. ` +
               `Raw output: ${stdout.substring(0, 500)}`,
             ),
           );
@@ -117,7 +110,7 @@ export class CliAgentConnector {
         if (!response.thread_id || !response.run_id || !Array.isArray(response.messages)) {
           rejectPromise(
             new Error(
-              `Agent "${graphId}" response is missing required fields ` +
+              `CLI agent response is missing required fields ` +
               `(thread_id, run_id, messages). Got: ${JSON.stringify(response).substring(0, 500)}`,
             ),
           );
@@ -132,7 +125,7 @@ export class CliAgentConnector {
         clearTimeout(timer);
         rejectPromise(
           new Error(
-            `Failed to spawn agent "${graphId}" (command: ${config.command}): ${err.message}`,
+            `Failed to spawn CLI agent (command: ${config.command}): ${err.message}`,
           ),
         );
       });
@@ -149,13 +142,19 @@ export class CliAgentConnector {
    * Execute a CLI agent and stream the response as SSE-compatible events.
    *
    * Runs the agent to completion, then emits the result as a sequence
-   * of AgentStreamEvents: metadata -> values -> messages -> end.
+   * of StreamEvents: metadata -> values -> messages -> end.
    * On error, emits an error event instead.
    */
-  async *streamAgent(
-    graphId: string,
+  async *stream(
+    config: AgentConfig,
     request: AgentRequest,
-  ): AsyncGenerator<AgentStreamEvent> {
+  ): AsyncGenerator<StreamEvent> {
+    if (config.type !== 'cli') {
+      throw new Error(
+        `CliAgentConnector received config with type "${config.type}", expected "cli"`,
+      );
+    }
+
     // Emit metadata event first
     yield {
       event: 'metadata',
@@ -167,7 +166,7 @@ export class CliAgentConnector {
 
     let response: AgentResponse;
     try {
-      response = await this.executeAgent(graphId, request);
+      response = await this.execute(config, request);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown agent error';
       yield {

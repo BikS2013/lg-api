@@ -1,9 +1,9 @@
 /**
  * Agent Request/Response Types
  *
- * Defines the JSON contract between the lg-api CLI agent connector
- * and external CLI agent processes. Agents receive an AgentRequest
- * on stdin and write an AgentResponse to stdout.
+ * Defines the JSON contract between the lg-api agent connectors
+ * and external agent processes. Agents receive an AgentRequest
+ * and return an AgentResponse.
  */
 
 /**
@@ -25,7 +25,7 @@ export interface AgentDocument {
 }
 
 /**
- * The JSON payload sent to the CLI agent process via stdin.
+ * The JSON payload sent to the agent process.
  */
 export interface AgentRequest {
   thread_id: string;
@@ -38,7 +38,7 @@ export interface AgentRequest {
 }
 
 /**
- * The JSON payload the CLI agent process writes to stdout.
+ * The JSON payload the agent process returns.
  */
 export interface AgentResponse {
   thread_id: string;
@@ -58,12 +58,47 @@ export interface AgentStreamEvent {
 }
 
 /**
- * Configuration for a registered CLI agent.
+ * A generic streaming event emitted by any agent connector.
  */
-export interface AgentConfig {
-  command: string;
-  args: string[];
-  cwd: string;
+export interface StreamEvent {
+  event: string;
+  data: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// Agent Configuration — Discriminated Union
+// ---------------------------------------------------------------------------
+
+/**
+ * Base configuration shared by all agent types.
+ */
+export interface BaseAgentConfig {
+  type: string;
   timeout: number;
   description?: string;
 }
+
+/**
+ * Configuration for a CLI-based agent (spawned as a child process).
+ */
+export interface CliAgentConfig extends BaseAgentConfig {
+  type: 'cli';
+  command: string;
+  args: string[];
+  cwd: string;
+}
+
+/**
+ * Configuration for an API-based agent (called via HTTP).
+ */
+export interface ApiAgentConfig extends BaseAgentConfig {
+  type: 'api';
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+}
+
+/**
+ * Discriminated union of all supported agent configuration types.
+ */
+export type AgentConfig = CliAgentConfig | ApiAgentConfig;
