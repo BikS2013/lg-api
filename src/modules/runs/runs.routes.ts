@@ -21,7 +21,11 @@ import {
 import { ThreadIdParamSchema } from '../../schemas/thread.schema.js';
 import { Type } from '@sinclair/typebox';
 import { RunsService } from './runs.service.js';
-import { getRepositoryRegistry } from '../../repositories/registry.js';
+import { getRepositoryRegistry, getStorageProvider } from '../../repositories/registry.js';
+import { AgentRegistry } from '../../agents/agent-registry.js';
+import { AgentExecutor } from '../../agents/agent-executor.js';
+import { AssistantResolver } from '../../agents/assistant-resolver.js';
+import { RequestComposer } from '../../agents/request-composer.js';
 import { setPaginationHeaders } from '../../utils/pagination.util.js';
 import type { StreamMode } from '../../types/index.js';
 
@@ -41,7 +45,12 @@ const ThreadIdOnlyParamSchema = Type.Object({
 
 export default async function registerRunRoutes(fastify: FastifyInstance): Promise<void> {
   const { runs: runsRepository, threads: threadsRepository } = getRepositoryRegistry();
-  const runsService = new RunsService(runsRepository, threadsRepository);
+  const storage = getStorageProvider();
+  const registry = new AgentRegistry();
+  const assistantResolver = new AssistantResolver(storage.assistants);
+  const agentExecutor = new AgentExecutor(registry);
+  const requestComposer = new RequestComposer();
+  const runsService = new RunsService(runsRepository, threadsRepository, agentExecutor, assistantResolver, requestComposer);
 
   // ---------------------------------------------------------------
   // 1. POST /threads/:thread_id/runs - Create stateful run

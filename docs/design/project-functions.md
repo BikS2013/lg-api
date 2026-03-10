@@ -446,7 +446,7 @@ The system must support integration with custom agents implemented as isolated C
 | `AGENT_REGISTRY_PATH` | No | Path to agent-registry.yaml (auto-detects at project root) |
 | `AZURE_OPENAI_API_KEY` | When using Azure OpenAI | Azure OpenAI API key |
 | `AZURE_OPENAI_ENDPOINT` | When using Azure OpenAI | Azure OpenAI endpoint URL |
-| `AZURE_OPENAI_DEPLOYMENT_NAME` | When using Azure OpenAI | Azure OpenAI deployment name |
+| `AZURE_OPENAI_DEPLOYMENT` | When using Azure OpenAI | Azure OpenAI deployment name |
 | `OPENAI_API_KEY` | When using OpenAI | OpenAI API key |
 | `ANTHROPIC_API_KEY` | When using Anthropic | Anthropic API key |
 | `GOOGLE_API_KEY` | When using Google | Google AI API key |

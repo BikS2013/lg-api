@@ -8,12 +8,12 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { AgentRegistry } from '../src/agents/agent-registry.js';
 import { CliAgentConnector } from '../src/agents/cli-connector.js';
 import { RequestComposer } from '../src/agents/request-composer.js';
-import type { AgentRequest, AgentStreamEvent } from '../src/agents/types.js';
+import type { AgentRequest, StreamEvent } from '../src/agents/types.js';
 
 const hasAzureKeys = !!(
   process.env['AZURE_OPENAI_API_KEY'] &&
   process.env['AZURE_OPENAI_ENDPOINT'] &&
-  process.env['AZURE_OPENAI_DEPLOYMENT_NAME']
+  process.env['AZURE_OPENAI_DEPLOYMENT']
 );
 
 describe('Agent Registry', () => {
@@ -21,7 +21,10 @@ describe('Agent Registry', () => {
     const registry = new AgentRegistry();
     const config = registry.getAgentConfig('passthrough');
     expect(config).not.toBeNull();
-    expect(config!.command).toBe('npx');
+    expect(config!.type).toBe('cli');
+    if (config!.type === 'cli') {
+      expect(config!.command).toBe('npx');
+    }
   });
 
   it('should return null for unknown graph_id', () => {
@@ -86,12 +89,13 @@ describe('CLI Agent Connector', () => {
 
   beforeAll(() => {
     registry = new AgentRegistry();
-    connector = new CliAgentConnector(registry);
+    connector = new CliAgentConnector();
   });
 
   it.skipIf(!hasAzureKeys)(
     'should execute the passthrough agent and get a response',
     async () => {
+      const config = registry.getAgentConfig('passthrough')!;
       const request: AgentRequest = {
         thread_id: 'test-thread',
         run_id: 'test-run',
@@ -101,7 +105,7 @@ describe('CLI Agent Connector', () => {
         ],
       };
 
-      const response = await connector.executeAgent('passthrough', request);
+      const response = await connector.execute(config, request);
 
       expect(response).toBeDefined();
       expect(response.thread_id).toBe('test-thread');
@@ -117,6 +121,7 @@ describe('CLI Agent Connector', () => {
   it.skipIf(!hasAzureKeys)(
     'should stream events from the passthrough agent',
     async () => {
+      const config = registry.getAgentConfig('passthrough')!;
       const request: AgentRequest = {
         thread_id: 'test-thread',
         run_id: 'test-run',
@@ -126,8 +131,8 @@ describe('CLI Agent Connector', () => {
         ],
       };
 
-      const events: AgentStreamEvent[] = [];
-      for await (const event of connector.streamAgent('passthrough', request)) {
+      const events: StreamEvent[] = [];
+      for await (const event of connector.stream(config, request)) {
         events.push(event);
       }
 
@@ -140,6 +145,7 @@ describe('CLI Agent Connector', () => {
   );
 
   it('should throw for unknown agent', async () => {
+    const fakeConfig = { type: 'cli' as const, command: 'nonexistent-cmd-xyz', args: [], cwd: '.', timeout: 5000 };
     const request: AgentRequest = {
       thread_id: 'test',
       run_id: 'test',
@@ -148,7 +154,7 @@ describe('CLI Agent Connector', () => {
     };
 
     await expect(
-      connector.executeAgent('nonexistent-agent', request),
+      connector.execute(fakeConfig, request),
     ).rejects.toThrow();
   });
 });

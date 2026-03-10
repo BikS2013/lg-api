@@ -18,9 +18,49 @@ import { ThreadsRepository } from '../src/modules/threads/threads.repository.js'
 import { ThreadsService } from '../src/modules/threads/threads.service.js';
 import { RunsRepository } from '../src/modules/runs/runs.repository.js';
 import { RunsService } from '../src/modules/runs/runs.service.js';
+import { RequestComposer } from '../src/agents/request-composer.js';
+import type { AgentExecutor } from '../src/agents/agent-executor.js';
+import type { AssistantResolver } from '../src/agents/assistant-resolver.js';
 import { randomUUID } from 'crypto';
 
 const config = { port: 3000, host: '0.0.0.0', authEnabled: false, apiKey: '' };
+
+/**
+ * Mock AssistantResolver that returns a fake assistant echoing the requested ID.
+ */
+function createMockAssistantResolver(): AssistantResolver {
+  return {
+    resolve: async (assistantIdOrGraphId: string) => ({
+      assistant_id: assistantIdOrGraphId,
+      graph_id: 'test-graph',
+      name: 'Test Assistant',
+      description: null,
+      config: {},
+      metadata: {},
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  } as unknown as AssistantResolver;
+}
+
+/**
+ * Mock AgentExecutor that returns a canned response without spawning agents.
+ */
+function createMockAgentExecutor(): AgentExecutor {
+  return {
+    execute: async (_graphId: string, request: any) => ({
+      thread_id: request.thread_id,
+      run_id: request.run_id,
+      messages: [{ role: 'assistant', content: 'Mock agent response.' }],
+    }),
+    stream: async function* (_graphId: string, request: any) {
+      yield { event: 'metadata', data: { run_id: request.run_id, thread_id: request.thread_id } };
+      yield { event: 'values', data: { messages: [{ type: 'ai', content: 'Mock streamed response.' }] } };
+      yield { event: 'end', data: null };
+    },
+  } as unknown as AgentExecutor;
+}
 
 let app: FastifyInstance;
 let threadsService: ThreadsService;
@@ -43,7 +83,10 @@ async function buildRunsTestApp(): Promise<FastifyInstance> {
   // Create shared repositories
   const sharedThreadsRepo = new ThreadsRepository();
   const runsRepo = new RunsRepository();
-  const runsService = new RunsService(runsRepo, sharedThreadsRepo);
+  const mockAgentExecutor = createMockAgentExecutor();
+  const mockAssistantResolver = createMockAssistantResolver();
+  const requestComposer = new RequestComposer();
+  const runsService = new RunsService(runsRepo, sharedThreadsRepo, mockAgentExecutor, mockAssistantResolver, requestComposer);
   threadsService = new ThreadsService(sharedThreadsRepo);
 
   // Register a minimal thread creation route using the shared repo
@@ -261,7 +304,7 @@ describe('Runs API', () => {
   // POST /threads/:thread_id/runs/:run_id/cancel - Cancel run
   // -------------------------------------------------------------------
   describe('POST /threads/:thread_id/runs/:run_id/cancel', () => {
-    it('should cancel a pending/running run (204)', async () => {
+    it('should return 409 when cancelling a completed run', async () => {
       const threadId = await createThread();
       const assistantId = randomUUID();
 
@@ -272,13 +315,17 @@ describe('Runs API', () => {
       });
       const created = JSON.parse(createRes.payload);
 
+      // Wait for the background agent execution to complete
+      await new Promise((r) => setTimeout(r, 200));
+
       const res = await app.inject({
         method: 'POST',
         url: `/threads/${threadId}/runs/${created.run_id}/cancel`,
         payload: {},
       });
 
-      expect(res.statusCode).toBe(204);
+      // Run completes almost instantly with mock agent, so cancel returns 409
+      expect(res.statusCode).toBe(409);
     });
 
     it('should return 404 for non-existent run cancel', async () => {

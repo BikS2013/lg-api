@@ -9,6 +9,7 @@ import type { FastifyReply } from 'fastify';
 import { StreamManager, StreamEvent, StreamSession } from '../../streaming/stream-manager.js';
 import type { StreamMode } from '../../types/index.js';
 import type { Run } from './runs.repository.js';
+import type { StreamEvent as AgentStreamEvent } from '../../agents/types.js';
 import { generateId } from '../../utils/uuid.util.js';
 import { nowISO } from '../../utils/date.util.js';
 
@@ -202,6 +203,65 @@ export class RunStreamEmitter {
     };
     session.eventBuffer.push(streamEvent);
     this.writeEvent(reply, streamEvent);
+  }
+
+  /**
+   * Stream real agent events from an AsyncGenerator to the client via SSE.
+   *
+   * Sets SSE headers, creates a stream session, iterates over agent events,
+   * buffers them for replay support, and writes them to the raw response.
+   *
+   * @param reply - The Fastify reply to write SSE events to
+   * @param run - The run associated with this stream
+   * @param agentStream - AsyncGenerator of StreamEvents from the agent executor
+   */
+  async streamFromAgent(
+    reply: FastifyReply,
+    run: Run,
+    agentStream: AsyncGenerator<AgentStreamEvent>,
+  ): Promise<void> {
+    // Set SSE headers
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const session = this.streamManager.createSession(run.run_id, run.thread_id, []);
+
+    try {
+      for await (const agentEvent of agentStream) {
+        session.lastEventId++;
+        const streamEvent: StreamEvent = {
+          event: agentEvent.event,
+          data: JSON.stringify(agentEvent.data),
+          id: String(session.lastEventId),
+        };
+        session.eventBuffer.push(streamEvent);
+        this.writeEvent(reply, streamEvent);
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown streaming error';
+      session.lastEventId++;
+      const errorEvent: StreamEvent = {
+        event: 'error',
+        data: JSON.stringify({ message }),
+        id: String(session.lastEventId),
+      };
+      session.eventBuffer.push(errorEvent);
+      this.writeEvent(reply, errorEvent);
+    } finally {
+      this.streamManager.closeSession(run.run_id);
+      reply.raw.end();
+    }
+  }
+
+  /**
+   * Get the underlying StreamManager instance (for joinStream replay).
+   */
+  getStreamManager(): StreamManager {
+    return this.streamManager;
   }
 
   /**

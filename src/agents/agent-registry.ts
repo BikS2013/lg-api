@@ -17,6 +17,7 @@ import type { AgentConfig, CliAgentConfig, ApiAgentConfig } from './types.js';
  */
 interface RawAgentEntry {
   type?: string;
+  name?: string;
   // CLI fields
   command?: string;
   args?: string[];
@@ -178,6 +179,7 @@ export class AgentRegistry {
 
     const config: CliAgentConfig = {
       type: 'cli',
+      name: entry.name,
       command: entry.command,
       args: entry.args ?? [],
       cwd: entry.cwd ?? '.',
@@ -186,6 +188,32 @@ export class AgentRegistry {
     };
 
     this.agents.set(graphId, config);
+  }
+
+  /**
+   * Substitute ${ENV_VAR} patterns in header values with environment variable values.
+   * Returns undefined if no headers are provided.
+   */
+  private substituteEnvVarsInHeaders(
+    headers?: Record<string, string>,
+  ): Record<string, string> | undefined {
+    if (!headers) {
+      return undefined;
+    }
+
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      result[key] = value.replace(/\$\{(\w+)\}/g, (_match, envVar: string) => {
+        const envValue = process.env[envVar];
+        if (envValue === undefined) {
+          throw new Error(
+            `Environment variable "${envVar}" referenced in header "${key}" is not set`,
+          );
+        }
+        return envValue;
+      });
+    }
+    return result;
   }
 
   /**
@@ -204,9 +232,10 @@ export class AgentRegistry {
 
     const config: ApiAgentConfig = {
       type: 'api',
+      name: entry.name,
       url: entry.url,
       method: entry.method ?? 'POST',
-      headers: entry.headers,
+      headers: this.substituteEnvVarsInHeaders(entry.headers),
       timeout: entry.timeout ?? 60000,
       description: entry.description,
     };

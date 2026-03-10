@@ -74,6 +74,7 @@ export interface StreamEvent {
  */
 export interface BaseAgentConfig {
   type: string;
+  name?: string;
   timeout: number;
   description?: string;
 }

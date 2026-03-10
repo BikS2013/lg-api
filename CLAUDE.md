@@ -28,7 +28,7 @@ All configuration is via environment variables. **No fallback values** - missing
 | `AGENT_REGISTRY_PATH` | No | Path to agent-registry.yaml (auto-detects at project root if not set) |
 | `AZURE_OPENAI_API_KEY` | When using passthrough agent with Azure OpenAI | Azure OpenAI API key |
 | `AZURE_OPENAI_ENDPOINT` | When using passthrough agent with Azure OpenAI | Azure OpenAI endpoint URL |
-| `AZURE_OPENAI_DEPLOYMENT_NAME` | When using passthrough agent with Azure OpenAI | Azure OpenAI deployment name |
+| `AZURE_OPENAI_DEPLOYMENT` | When using passthrough agent with Azure OpenAI | Azure OpenAI deployment name |
 
 ## Project Structure
 
@@ -141,7 +141,7 @@ lg-api Run -> RequestComposer -> AgentRequest JSON -> CliAgentConnector
         Supports named profiles per provider (provider + profile fields).
 
         Supported LLM providers:
-        - azure-openai: Requires AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT_NAME
+        - azure-openai: Requires AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
         - openai: Requires OPENAI_API_KEY
         - anthropic: Requires ANTHROPIC_API_KEY
         - google: Requires GOOGLE_API_KEY
@@ -239,6 +239,82 @@ npm run dev      # Start dev server with hot reload (tsx watch)
 npm run build    # Compile TypeScript
 npm start        # Run compiled server
 npm test         # Run test suite (vitest)
+```
+
+## Testing
+
+### Automated Tests
+
+The project uses **Vitest** as its test framework. All test files reside in the `test_scripts/` directory.
+
+```bash
+npm test                           # Run all tests (170 total)
+npx vitest run test_scripts/runs.test.ts   # Run a specific test file
+npx vitest run --reporter=verbose  # Verbose output with individual test names
+```
+
+**Test files (12):**
+
+| File | Scope | Tests |
+|------|-------|-------|
+| `storage-memory.test.ts` | In-memory storage provider | 7 |
+| `storage-config.test.ts` | YAML config loader | 15 |
+| `storage-factory.test.ts` | Storage provider factory | 4 |
+| `storage-sqlite.test.ts` | SQLite storage provider | 58 |
+| `agent-connector.test.ts` | Agent registry, request composer, CLI connector | 7 (2 skipped without Azure keys) |
+| `assistants.test.ts` | Assistants CRUD endpoints | 16 |
+| `threads.test.ts` | Threads CRUD endpoints | 13 |
+| `runs.test.ts` | Runs CRUD, wait, batch endpoints | 15 |
+| `runs-streaming.test.ts` | SSE streaming endpoints | 9 |
+| `crons.test.ts` | Crons CRUD endpoints | 10 |
+| `store.test.ts` | Store CRUD endpoints | 9 |
+| `system.test.ts` | Health check, server info | 7 |
+
+**Notes:**
+- Tests for runs and streaming use **mock agent dependencies** (`createMockAgentExecutor`, `createMockAssistantResolver`) so they don't require real LLM API keys or agent processes
+- The 2 skipped tests in `agent-connector.test.ts` require Azure OpenAI env vars (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`)
+- Tests that use the full Fastify app (system, crons, store, assistants) will show `[auto-register]` log messages — this is normal (the app auto-registers agents from `agent-registry.yaml` on startup)
+
+### Manual End-to-End Testing
+
+Prerequisites: Start the server (`npm run dev`) and ensure the passthrough agent's LLM env vars are set.
+
+```bash
+# 1. Verify server is running
+curl -s http://localhost:8123/ok | jq
+
+# 2. Check auto-registered assistants
+curl -s http://localhost:8123/assistants/search \
+  -X POST -H 'Content-Type: application/json' -d '{}' | jq
+
+# 3. Create a conversation thread
+curl -s http://localhost:8123/threads \
+  -X POST -H 'Content-Type: application/json' -d '{}' | jq
+# → note the thread_id from the response
+
+# 4. Synchronous run (wait for agent response)
+curl -s http://localhost:8123/threads/<THREAD_ID>/runs/wait \
+  -X POST -H 'Content-Type: application/json' \
+  -d '{"assistant_id":"passthrough","input":{"messages":[{"role":"user","content":"What is 2+2?"}]}}' | jq
+
+# 5. Streaming run (SSE)
+curl -N http://localhost:8123/threads/<THREAD_ID>/runs/stream \
+  -X POST -H 'Content-Type: application/json' \
+  -d '{"assistant_id":"passthrough","input":{"messages":[{"role":"user","content":"Tell me a joke"}]}}'
+
+# 6. Check thread state (conversation history persists across runs)
+curl -s http://localhost:8123/threads/<THREAD_ID>/state | jq
+
+# 7. Stateless run (no thread, single-shot)
+curl -s http://localhost:8123/runs/wait \
+  -X POST -H 'Content-Type: application/json' \
+  -d '{"assistant_id":"passthrough","input":{"messages":[{"role":"user","content":"Hello"}]}}' | jq
+```
+
+### TypeScript Compilation Check
+
+```bash
+npx tsc --noEmit    # Verify all types without emitting files
 ```
 
 ## API curl Reference

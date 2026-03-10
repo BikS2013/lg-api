@@ -72,7 +72,7 @@ export async function autoRegisterAssistants(
       const assistant = {
         assistant_id: crypto.randomUUID(),
         graph_id: graphId,
-        name: config.description || graphId,
+        name: config.name || graphId,
         description: `Auto-registered from agent-registry.yaml (type: ${config.type})`,
         config: {},
         metadata: {

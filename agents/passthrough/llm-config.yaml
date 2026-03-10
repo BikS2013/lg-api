@@ -9,7 +9,7 @@ azure-openai:
   default:
     apiKey: ${AZURE_OPENAI_API_KEY}
     endpoint: ${AZURE_OPENAI_ENDPOINT}
-    deploymentName: ${AZURE_OPENAI_DEPLOYMENT_NAME}
+    deploymentName: ${AZURE_OPENAI_DEPLOYMENT}
     apiVersion: "2024-08-01-preview"
     temperature: 0.7
     maxTokens: 4096

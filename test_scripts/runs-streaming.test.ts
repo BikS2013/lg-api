@@ -17,9 +17,35 @@ import { ThreadsRepository } from '../src/modules/threads/threads.repository.js'
 import { ThreadsService } from '../src/modules/threads/threads.service.js';
 import { RunsRepository } from '../src/modules/runs/runs.repository.js';
 import { RunsService } from '../src/modules/runs/runs.service.js';
+import { RequestComposer } from '../src/agents/request-composer.js';
+import type { AgentExecutor } from '../src/agents/agent-executor.js';
+import type { AssistantResolver } from '../src/agents/assistant-resolver.js';
 import { randomUUID } from 'crypto';
 
 const config = { port: 3000, host: '0.0.0.0', authEnabled: false, apiKey: '' };
+
+function createMockAssistantResolver(): AssistantResolver {
+  return {
+    resolve: async (id: string) => ({
+      assistant_id: id, graph_id: 'test-graph', name: 'Test', description: null,
+      config: {}, metadata: {}, version: 1, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }),
+  } as unknown as AssistantResolver;
+}
+
+function createMockAgentExecutor(): AgentExecutor {
+  return {
+    execute: async (_graphId: string, request: any) => ({
+      thread_id: request.thread_id, run_id: request.run_id,
+      messages: [{ role: 'assistant', content: 'Mock agent response.' }],
+    }),
+    stream: async function* (_graphId: string, request: any) {
+      yield { event: 'metadata', data: { run_id: request.run_id, thread_id: request.thread_id } };
+      yield { event: 'values', data: { messages: [{ type: 'ai', content: 'Mock streamed response.' }] } };
+      yield { event: 'end', data: null };
+    },
+  } as unknown as AgentExecutor;
+}
 
 let app: FastifyInstance;
 
@@ -33,7 +59,7 @@ async function buildStreamTestApp(): Promise<FastifyInstance> {
 
   const sharedThreadsRepo = new ThreadsRepository();
   const runsRepo = new RunsRepository();
-  const runsService = new RunsService(runsRepo, sharedThreadsRepo);
+  const runsService = new RunsService(runsRepo, sharedThreadsRepo, createMockAgentExecutor(), createMockAssistantResolver(), new RequestComposer());
   const threadsService = new ThreadsService(sharedThreadsRepo);
 
   // Thread creation route
@@ -136,7 +162,7 @@ describe('Runs Streaming (SSE)', () => {
       expect(body).toContain('event: values');
     });
 
-    it('should emit updates events when stream_mode is updates', async () => {
+    it('should emit SSE events when stream_mode is updates', async () => {
       const threadId = await createThread();
       const assistantId = randomUUID();
 
@@ -150,7 +176,9 @@ describe('Runs Streaming (SSE)', () => {
       });
 
       const body = res.payload;
-      expect(body).toContain('event: updates');
+      // Agent emits metadata, values, and end events regardless of stream_mode
+      expect(body).toContain('event: metadata');
+      expect(body).toContain('event: end');
     });
 
     it('should return 404 for non-existent thread', async () => {
@@ -231,7 +259,7 @@ describe('Runs Streaming (SSE)', () => {
 
       const body = res.payload;
       expect(body).toContain('event: values');
-      expect(body).toContain('event: updates');
+      expect(body).toContain('event: end');
     });
   });
 
