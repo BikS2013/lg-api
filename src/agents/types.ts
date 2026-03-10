@@ -7,11 +7,29 @@
  */
 
 /**
+ * Metadata returned by the LLM provider alongside a completion response.
+ * All fields are optional — agents populate only what the provider supplies.
+ */
+export interface LlmResponseMetadata {
+  model?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  finish_reason?: string;
+  latency_ms?: number;
+  provider?: string;
+  provider_response_id?: string;
+}
+
+/**
  * A single message in the agent conversation.
  */
 export interface AgentMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  response_metadata?: LlmResponseMetadata;
 }
 
 /**

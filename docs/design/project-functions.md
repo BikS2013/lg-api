@@ -555,10 +555,66 @@ This enables conversation continuity across runs, with the `RequestComposer` rea
 
 ---
 
+## FR-19: LLM Invocation Metadata Capture and Storage
+
+The system must capture per-message LLM invocation metadata from agent responses and persist it in thread state alongside assistant messages.
+
+### FR-19.1: LLM Response Metadata Interface
+
+A standardized `LlmResponseMetadata` interface must be defined with the following optional fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | `string` | Model identifier as reported by the provider |
+| `usage.prompt_tokens` | `number` | Number of tokens in the prompt |
+| `usage.completion_tokens` | `number` | Number of tokens in the completion |
+| `usage.total_tokens` | `number` | Total tokens consumed |
+| `finish_reason` | `string` | Why the model stopped generating (e.g., "stop", "length") |
+| `latency_ms` | `number` | Wall-clock latency of the LLM call in milliseconds |
+| `provider` | `string` | LLM provider name (e.g., "azure-openai", "openai", "anthropic", "google") |
+| `provider_response_id` | `string` | Provider-specific response ID for log correlation |
+
+All fields are optional to accommodate varying LLM providers.
+
+### FR-19.2: Agent Message Extension
+
+The `AgentMessage` interface (both in lg-api shared types and agent-local types) must include an optional `response_metadata` field of type `LlmResponseMetadata`. This field is present only on assistant messages returned by agents.
+
+### FR-19.3: Passthrough Agent Metadata Extraction
+
+The passthrough agent must:
+- Measure wall-clock latency around the LLM invocation
+- Extract model name, token usage, and finish reason from the LangChain `AIMessage` response
+- Normalize provider-specific field names into the standard `LlmResponseMetadata` shape
+- Populate `provider` from the loaded LLM configuration
+- Attach the metadata to the assistant message in the `AgentResponse`
+
+### FR-19.4: Thread State Metadata Persistence
+
+The lg-api `RunsService` must:
+- Include `response_metadata` when mapping agent response messages to stored thread state messages (in `updateThreadState()`)
+- Include `response_metadata` when mapping agent response messages to wait result messages (in `wait()`)
+- Use conditional spreading so that `response_metadata` is omitted when absent (backward compatible)
+
+### FR-19.5: Backward Compatibility
+
+- `response_metadata` is optional; agents that do not return it continue working unchanged
+- Existing thread state data without `response_metadata` remains valid
+- No changes to `AgentRequest`, SSE streaming format, or API schemas
+
+### FR-19.6: Non-Goals
+
+- Aggregating metadata across runs (cumulative token usage per thread)
+- Modifying the SSE streaming event format with metadata
+- Adding metadata to user or system messages
+
+---
+
 ## Revision History
 
 | Date | Version | Description |
 |------|---------|-------------|
+| 2026-03-11 | 1.4 | Added FR-19 (LLM Invocation Metadata Capture and Storage) with sub-requirements FR-19.1 through FR-19.6 |
 | 2026-03-10 | 1.3 | Added FR-18 (Agent-Assistant Integration) with sub-requirements FR-18.1 through FR-18.8 |
 | 2026-03-10 | 1.2 | Added FR-17 (Custom Agent Integration) with sub-requirements FR-17.1 through FR-17.6 |
 | 2026-03-09 | 1.1 | Added FR-15 (Pluggable Storage Infrastructure) and FR-16 (Extended Configuration Management) |

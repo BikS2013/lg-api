@@ -91,3 +91,8 @@ I consider the following changes:
 4. The same instructions might be registered in the assistant's entry into the storage
 5. On run execution: Wire the actual pipeline: assistant lookup → graph_id → agent registry → CLI connector → agent execution → SSE streaming
 Use the information registered into the docs/reference/investigation-assistant-registration.md to evaluate my proposal, and finalize a proposal to allow the actual integration between the lg-api and the agents.
+
+
+### Request 010 
+I want you to change the passthrough agent to return the llm invokation metadata 
+The lg-api must capture these metadata and store them in the thread as response metadata in each message 

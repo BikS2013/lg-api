@@ -1,7 +1,7 @@
 import { HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
 import type { BaseMessageLike } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import type { AgentRequest, AgentResponse, Document } from './types.js';
+import type { AgentRequest, AgentResponse, Document, LlmResponseMetadata } from './types.js';
 
 /**
  * Build a context system message from the provided documents.
@@ -52,15 +52,42 @@ function toLangChainMessages(
  */
 export async function runAgent(
   model: BaseChatModel,
-  request: AgentRequest
+  request: AgentRequest,
+  provider: string,
 ): Promise<AgentResponse> {
   const langChainMessages = toLangChainMessages(request);
+
+  const startTime = Date.now();
   const result = await model.invoke(langChainMessages);
+  const endTime = Date.now();
 
   const responseContent =
     typeof result.content === 'string'
       ? result.content
       : JSON.stringify(result.content);
+
+  // Extract metadata from LangChain AIMessage
+  const responseMeta = result.response_metadata as Record<string, unknown> | undefined;
+  const usageMeta = result.usage_metadata as Record<string, unknown> | undefined;
+
+  const llmMetadata: LlmResponseMetadata = {
+    model: (responseMeta?.['model_name'] ?? responseMeta?.['model']) as string | undefined,
+    usage: usageMeta
+      ? {
+          prompt_tokens: (usageMeta['input_tokens'] as number | undefined),
+          completion_tokens: (usageMeta['output_tokens'] as number | undefined),
+          total_tokens: (usageMeta['total_tokens'] as number | undefined),
+        }
+      : undefined,
+    finish_reason: (
+      responseMeta?.['finish_reason'] ??
+      responseMeta?.['stop_reason'] ??
+      responseMeta?.['finishReason']
+    ) as string | undefined,
+    latency_ms: endTime - startTime,
+    provider,
+    provider_response_id: (responseMeta?.['id'] ?? responseMeta?.['system_fingerprint']) as string | undefined,
+  };
 
   return {
     thread_id: request.thread_id,
@@ -69,6 +96,7 @@ export async function runAgent(
       {
         role: 'assistant',
         content: responseContent,
+        response_metadata: llmMetadata,
       },
     ],
     state: request.state,

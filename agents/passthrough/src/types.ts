@@ -8,9 +8,41 @@ export interface AgentRequest {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Metadata from a single LLM invocation, attached to the response message.
+ */
+export interface LlmResponseMetadata {
+  /** The model identifier as reported by the provider (e.g., "gpt-4o", "claude-3-opus") */
+  model?: string;
+
+  /** Token usage breakdown */
+  usage?: {
+    /** Number of tokens in the prompt */
+    prompt_tokens?: number;
+    /** Number of tokens in the completion */
+    completion_tokens?: number;
+    /** Total tokens consumed (prompt + completion) */
+    total_tokens?: number;
+  };
+
+  /** Why the model stopped generating (e.g., "stop", "length", "content_filter") */
+  finish_reason?: string;
+
+  /** Wall-clock latency of the LLM call in milliseconds */
+  latency_ms?: number;
+
+  /** The LLM provider that served the request (e.g., "azure-openai", "openai", "anthropic", "google") */
+  provider?: string;
+
+  /** Provider-specific response ID (e.g., OpenAI's response id) */
+  provider_response_id?: string;
+}
+
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /** LLM invocation metadata -- present only on assistant messages returned by agents */
+  response_metadata?: LlmResponseMetadata;
 }
 
 export interface Document {

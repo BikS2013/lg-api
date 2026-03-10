@@ -3307,3 +3307,60 @@ The agent system singletons (`AgentExecutor`, `AssistantResolver`, `RequestCompo
 | D: Pipeline Wiring | `runs.service.ts`, `runs.streaming.ts`, `runs.routes.ts`, `registry.ts` | Units A+B+C | Sequential |
 
 No file appears in more than one unit, enabling true parallel development of Units B and C after Unit A completes.
+
+---
+
+## 14. LLM Invocation Metadata
+
+### 14.1 Overview
+
+The agent protocol is extended so that CLI agents can return per-message LLM invocation metadata (model, token usage, finish reason, latency, provider). The lg-api captures this metadata from the `AgentResponse` and persists it alongside each assistant message in the thread state.
+
+### 14.2 LlmResponseMetadata Interface
+
+A new `LlmResponseMetadata` interface is defined in both the passthrough agent types (`agents/passthrough/src/types.ts`) and the lg-api shared types (`src/agents/types.ts`):
+
+```typescript
+export interface LlmResponseMetadata {
+  model?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  finish_reason?: string;
+  latency_ms?: number;
+  provider?: string;
+  provider_response_id?: string;
+}
+```
+
+All fields are optional to accommodate varying LLM providers. The field is added as `response_metadata?: LlmResponseMetadata` on both the agent-side `Message` and the lg-api `AgentMessage` interfaces.
+
+### 14.3 Agent-Side Metadata Extraction
+
+The passthrough agent (`agents/passthrough/src/agent.ts`) extracts metadata from the LangChain `AIMessage` returned by `model.invoke()`:
+
+- **`model`**: from `response_metadata.model_name` or `response_metadata.model`
+- **`usage`**: from `usage_metadata.input_tokens`, `output_tokens`, `total_tokens`
+- **`finish_reason`**: from `response_metadata.finish_reason` (OpenAI), `stop_reason` (Anthropic), or `finishReason` (Google)
+- **`latency_ms`**: wall-clock measurement around the `model.invoke()` call
+- **`provider`**: passed in from the loaded `LlmConfig.provider` value
+- **`provider_response_id`**: from `response_metadata.id` or `response_metadata.system_fingerprint`
+
+### 14.4 lg-api Storage Integration
+
+The `RunsService` in `src/modules/runs/runs.service.ts` includes `response_metadata` when mapping agent response messages to thread state messages:
+
+- **`updateThreadState()`**: conditionally spreads `response_metadata` into stored messages
+- **`wait()`**: conditionally spreads `response_metadata` into result messages
+
+The metadata is persisted in thread state and accessible via `GET /threads/:id/state` and `POST /threads/:id/history`.
+
+### 14.5 Backward Compatibility
+
+- `response_metadata` is optional on both `Message` and `AgentMessage`
+- Agents that do not return metadata continue to work unchanged
+- Existing thread state data remains valid
+- No schema validation changes required
+- `AgentRequest` is unchanged

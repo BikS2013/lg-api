@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   const model = createChatModel(llmConfig);
 
   // Run the agent
-  const response = await runAgent(model, request);
+  const response = await runAgent(model, request, llmConfig.provider);
 
   // Write JSON response to stdout
   process.stdout.write(JSON.stringify(response));

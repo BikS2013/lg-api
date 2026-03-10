@@ -501,6 +501,7 @@ export class RunsService {
             type: m.role === 'assistant' ? 'ai' : m.role === 'user' ? 'human' : 'system',
             content: m.content,
             id: generateId(),
+            ...(m.response_metadata ? { response_metadata: m.response_metadata } : {}),
           })),
         },
       };
@@ -737,12 +738,32 @@ export class RunsService {
     const responseMessages = agentResponse.messages.map((m) => ({
       type: m.role === 'assistant' ? 'ai' : m.role === 'user' ? 'human' : 'system',
       content: m.content,
+      ...(m.response_metadata ? { response_metadata: m.response_metadata } : {}),
     }));
     const allMessages = [...existingMessages, ...inputMessages, ...responseMessages];
 
+    const now = nowISO();
+    const newValues = { ...stateValues, messages: allMessages, ...(agentResponse.state || {}) };
+
+    // Write to state history (used by getState for next run's context)
+    await this.threadsRepository.addState(threadId, {
+      values: newValues,
+      next: [],
+      checkpoint: {
+        thread_id: threadId,
+        checkpoint_ns: '',
+        checkpoint_id: generateId(),
+      },
+      metadata: { source: 'run' },
+      created_at: now,
+      parent_checkpoint: (currentState?.['checkpoint'] as { thread_id: string; checkpoint_ns: string; checkpoint_id: string } | null) ?? null,
+      tasks: [],
+    });
+
+    // Also update the thread entity's values
     await this.threadsRepository.update(threadId, {
-      values: { ...stateValues, messages: allMessages, ...(agentResponse.state || {}) },
-      updated_at: nowISO(),
+      values: newValues,
+      updated_at: now,
     });
   }
 }
