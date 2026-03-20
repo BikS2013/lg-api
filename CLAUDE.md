@@ -120,6 +120,7 @@ lg-api Run -> RequestComposer -> AgentRequest JSON -> CliAgentConnector
 - `src/agents/request-composer.ts` - Builds AgentRequest from thread state + run input + documents
 - `src/agents/types.ts` - AgentRequest, AgentResponse, AgentMessage, AgentDocument interfaces
 - `agents/passthrough/` - Isolated pass-through test agent (own package.json, LangChain)
+- `agents/skill-agent/` - Generic skill agent that deploys Claude Code skills as lg-api agents (own package.json, Anthropic SDK)
 
 ## Tools
 
@@ -231,6 +232,92 @@ lg-api Run -> RequestComposer -> AgentRequest JSON -> CliAgentConnector
         // Or stream: for await (const event of connector.streamAgent('passthrough', request)) { ... }
     </info>
 </cli-agent-connector>
+
+<skill-agent>
+    <objective>
+        Generic skill agent that deploys Claude Code skills (SKILL.md files) as lg-api agents. Each skill is defined as a markdown file with YAML frontmatter and is served through the Anthropic Claude API.
+    </objective>
+    <command>
+        echo '{"thread_id":"t1","run_id":"r1","assistant_id":"skill-code-reviewer","messages":[{"role":"user","content":"Review this code:\n```python\ndef add(a, b): return a + b\n```"}]}' | npx tsx agents/skill-agent/src/index.ts --skill code-reviewer
+    </command>
+    <info>
+        An isolated CLI tool (separate package.json under agents/skill-agent/) that:
+        - Reads an AgentRequest JSON object from stdin
+        - Loads a SKILL.md file specified by --skill CLI argument or SKILL_NAME env var
+        - Parses the skill's YAML frontmatter (name, description, model) and markdown body (system prompt)
+        - Calls the Anthropic Messages API with the skill's system prompt + conversation messages
+        - Writes an AgentResponse JSON object to stdout
+        - Errors go to stderr only (never stdout)
+
+        Skill files location: agents/skill-agent/skills/<skill-name>.md
+
+        Skill file format (SKILL.md):
+        ---
+        name: <skill-name>           # Required
+        description: <description>    # Required
+        model: <claude-model>         # Optional (falls back to CLAUDE_MODEL env var)
+        tools:                        # Optional
+          - ToolName
+        ---
+        <markdown body = system prompt sent to Claude>
+
+        Required environment variables (no fallbacks):
+        - ANTHROPIC_API_KEY: Anthropic API key
+        - MAX_TOKENS: Maximum response tokens (positive integer)
+
+        Optional environment/config:
+        - CLAUDE_MODEL: Model identifier (used if skill frontmatter has no "model" field)
+        - SKILL_NAME: Alternative to --skill CLI argument
+
+        Command line parameters:
+        --skill <name>   Name of the skill to load (matches <name>.md in skills/ directory)
+
+        Input format (AgentRequest):
+        {
+          "thread_id": "string",
+          "run_id": "string",
+          "assistant_id": "string",
+          "messages": [{"role": "user|assistant|system", "content": "string"}],
+          "documents": [{"id": "string", "title": "string", "content": "string"}],
+          "state": {},
+          "metadata": {}
+        }
+
+        Output format (AgentResponse):
+        {
+          "thread_id": "string",
+          "run_id": "string",
+          "messages": [{"role": "assistant", "content": "string", "response_metadata": {...}}],
+          "state": {},
+          "metadata": {"skill_name": "string", "skill_description": "string"}
+        }
+
+        The response_metadata includes: model, usage (prompt_tokens, completion_tokens, total_tokens),
+        finish_reason, latency_ms, provider ("anthropic"), provider_response_id.
+
+        Examples:
+        # Code review request
+        echo '{"thread_id":"t1","run_id":"r1","assistant_id":"skill-code-reviewer","messages":[{"role":"user","content":"Review this:\n```js\nconst x = eval(input)\n```"}]}' | npx tsx agents/skill-agent/src/index.ts --skill code-reviewer
+
+        # Using SKILL_NAME env var instead of --skill
+        SKILL_NAME=code-reviewer echo '{"thread_id":"t1","run_id":"r1","assistant_id":"a1","messages":[{"role":"user","content":"Hello"}]}' | npx tsx agents/skill-agent/src/index.ts
+
+        # With document context
+        echo '{"thread_id":"t1","run_id":"r1","assistant_id":"a1","messages":[{"role":"user","content":"Review the attached code"}],"documents":[{"id":"d1","title":"main.py","content":"def foo(): pass"}]}' | npx tsx agents/skill-agent/src/index.ts --skill code-reviewer
+
+        Adding a new skill:
+        1. Create a .md file in agents/skill-agent/skills/ with YAML frontmatter + prompt body
+        2. Add an entry to agent-registry.yaml with --skill <name> in the args
+        3. Restart lg-api for auto-registration
+
+        Setup:
+        cd agents/skill-agent && npm install
+        # Set env vars: ANTHROPIC_API_KEY, MAX_TOKENS (and optionally CLAUDE_MODEL)
+
+        Tests:
+        npx vitest run test_scripts/skill-agent.test.ts
+    </info>
+</skill-agent>
 
 ## Commands
 

@@ -12,6 +12,13 @@ agents:
     description: "Pass-through test agent - forwards requests directly to an LLM"
     timeout: 60000
 
+  skill-code-reviewer:
+    command: npx
+    args: ["tsx", "agents/skill-agent/src/index.ts", "--skill", "code-reviewer"]
+    cwd: "."
+    description: "Code review skill agent - reviews code for quality and best practices"
+    timeout: 120000
+
   # Example for a Python agent:
   # rag-agent:
   #   command: python

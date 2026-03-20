@@ -1,0 +1,13 @@
+# Agent Registry (Docker Production)
+# Uses pre-compiled JavaScript -- no tsx runtime dependency.
+# This file is baked into the lg-api:base Docker image.
+# Override at runtime by mounting a custom file at /app/agent-registry.yaml
+# or by setting the AGENT_REGISTRY_PATH environment variable.
+
+agents:
+  passthrough:
+    command: node
+    args: ["agents/passthrough/dist/index.js"]
+    cwd: "."
+    description: "Pass-through agent - forwards requests directly to an LLM"
+    timeout: 60000

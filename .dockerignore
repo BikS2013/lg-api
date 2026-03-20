@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies (installed inside the container)
+node_modules
+agents/*/node_modules
+
+# Build outputs (generated inside the container)
+dist
+agents/*/dist
+
+# Secrets and environment files
+.env
+.env.*
+*.key
+*.pem
+storage-config.yaml
+
+# Documentation and non-runtime files
+*.md
+!agents/skill-agent/skills/*.md
+docs/
+deprecated-documents/
+
+# Test files
+test_scripts/
+coverage/
+vitest.config.ts
+
+# IDE and OS artifacts
+.idea/
+.vscode/
+.serena/
+.claude/
+.DS_Store
+*.log
+*.swp
+*.swo
+
+# Data files
+data/
