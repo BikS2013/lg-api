@@ -743,7 +743,7 @@ export class RunsService {
     const allMessages = [...existingMessages, ...inputMessages, ...responseMessages];
 
     const now = nowISO();
-    const newValues = { ...stateValues, messages: allMessages, ...(agentResponse.state || {}) };
+    const newValues = { ...stateValues, messages: allMessages, ...(agentResponse.state ? { state: agentResponse.state } : {}) };
 
     // Write to state history (used by getState for next run's context)
     await this.threadsRepository.addState(threadId, {

@@ -221,9 +221,12 @@ export class RequestComposer {
       return inputState;
     }
 
-    // Otherwise, pass the stored state from thread (set by a previous agent response)
+    // Otherwise, pass the stored state from thread (set by a previous agent response).
+    // updateThreadState() spreads agentResponse.state into values, so the stored
+    // state lives at threadState.values.state, not threadState.state.
     if (threadState) {
-      const storedState = threadState['state'] as Record<string, unknown> | undefined;
+      const values = threadState['values'] as Record<string, unknown> | undefined;
+      const storedState = values?.['state'] as Record<string, unknown> | undefined;
       if (storedState && typeof storedState === 'object') {
         return storedState;
       }
