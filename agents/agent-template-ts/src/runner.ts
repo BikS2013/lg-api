@@ -40,8 +40,9 @@ export function runAgent(handler: AgentHandler): void {
     .then(parseRequest)
     .then(handler)
     .then((response) => {
-      process.stdout.write(JSON.stringify(response));
-      process.exit(0);
+      process.stdout.write(JSON.stringify(response), () => {
+        process.exit(0);
+      });
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
