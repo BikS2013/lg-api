@@ -100,9 +100,8 @@ export const JoinStreamQuerySchema = Type.Object({
 });
 
 // --- Run Wait Response ---
-export const RunWaitResponseSchema = Type.Object({
-  run_id: Type.String({ format: 'uuid' }),
-  thread_id: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]),
-  status: RunStatusEnum,
-  result: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-});
+// Per the LangGraph Platform contract, `/runs/wait` returns the graph's final
+// state values at the response root — e.g. `{ messages: [...], <state_keys> }`.
+// Run metadata (run_id, status, kwargs) lives on `/threads/:id/runs/:run_id`,
+// not here.
+export const RunWaitResponseSchema = Type.Record(Type.String(), Type.Unknown());

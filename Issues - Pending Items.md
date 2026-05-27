@@ -55,11 +55,73 @@
 - **Description**: Per project rules, no fallback values are permitted for configuration. However, the storage system needs a way to work without a config file (defaulting to in-memory provider). The approach is: if `STORAGE_CONFIG_PATH` env var is not set, the loader checks if `storage-config.yaml` exists at the project root. If the file exists, it is loaded. If neither the env var nor the file exist, the system defaults to the in-memory provider. This is file-existence detection, not a config fallback -- documented as a deliberate exception per the storage infrastructure design.
 - **Severity**: Info (deliberate design decision)
 
+### LG-RUNCREATE-LANGSMITH-TRACING — `langsmith_tracing` field missing from `RunCreateRequestSchema`
+- **File**: `src/schemas/run.schema.ts`
+- **Description**: The official LangGraph `RunCreate` body accepts a `langsmith_tracing` object that routes traces to a specific project / associates with a dataset example. lg-api's strict TypeBox validator rejects any request that includes it, so SDK clients with tracing enabled get a 400.
+- **Severity**: High (breaks any SDK client with tracing)
+- **Recommendation**: Add `langsmith_tracing: Type.Optional(Type.Object({...}))` (or `Type.Record(Type.String(), Type.Unknown())` for forward compat) to `RunCreateRequestSchema`.
+
+### LG-HISTORY-BODY-OPTIONAL — `POST /threads/:id/history` requires a request body
+- **File**: `src/modules/threads/threads.routes.ts` (route handler), `src/schemas/thread.schema.ts` (`ThreadHistoryRequestSchema`)
+- **Description**: The official LangGraph SDK calls `client.threads.get_history(thread_id)` with no filter args; the server defaults `limit=10` and returns. lg-api declares the body as required, so an empty POST without `Content-Type`/body returns 400.
+- **Severity**: High (breaks the SDK's most common no-args usage)
+- **Recommendation**: Make the body optional. Either wrap the schema in `Type.Optional(...)` at the route, or default `request.body` to `{}` in the handler before passing it to the service. Apply default `limit = 10` server-side.
+
+### LG-THREADID-FORMAT — `format: 'uuid'` enforced on all `/threads/:id/*` routes
+- **Files**: `src/schemas/thread.schema.ts` (`ThreadIdParamSchema`), all routes that consume it
+- **Description**: lg-api restricts `thread_id` path params to UUIDs; the official LangGraph Platform accepts any string (the SDK's own example uses `"my_thread_id"`). A client passing a non-UUID thread id gets a 400 from lg-api but a 200 from the real server.
+- **Severity**: High (breaks SDK example code and any consumer using semantic thread ids)
+- **Recommendation**: Drop `format: 'uuid'` from `ThreadIdParamSchema`. Sweep the codebase for any other path-param schemas with the same UUID constraint (`run_id`, `assistant_id` may have the same issue).
+
+### LG-RUNCREATE-CHECKPOINT-ID — top-level `checkpoint_id` is an lg-api extension
+- **File**: `src/schemas/run.schema.ts`
+- **Description**: `RunCreateRequestSchema` declares a top-level `checkpoint_id: uuid` field. The official `RunCreate` body has only the `checkpoint` object; `checkpoint_id` is a path/query parameter elsewhere (`/threads/:id/history`, `/threads/:id/state/{checkpoint_id}`) but never on `RunCreate`. Harmless for SDK clients (they don't send it), but documenting it as part of the run body misleads consumers.
+- **Severity**: Low (no client breaks today)
+- **Recommendation**: Remove `checkpoint_id` from the run body schema. If lg-api needs to honor it as a back-compat alias, keep the field but mark it deprecated and accept `checkpoint: { checkpoint_id }` as the canonical form.
+
+### LG-RUNS-KWARGS-GAPS — `kwargs` field on `Run` is loose and missing canonical sub-fields
+- **File**: `src/schemas/run.schema.ts` (`RunSchema`), `src/modules/runs/runs.service.ts` (object builders at line 76 area)
+- **Description**: `RunSchema.kwargs` is declared `Type.Optional(Type.Record(String, Unknown))` and the service populates only `{input, config, stream_mode, interrupt_before, interrupt_after, webhook}`. Official LangGraph always returns `kwargs` (not optional) and includes `context`, `feedback_keys`, `temporary` alongside the fields above. No SDK client breaks today, but the response is leaner than the spec.
+- **Severity**: Low (P3)
+- **Recommendation**: Tighten `kwargs` to required, declare its sub-fields explicitly, and populate `context`, `temporary`, `feedback_keys` from the run create request in `createStateful` / `createStateless` / `wait` / `streamRun`.
+
+### LG-WAIT-INTERRUPT-STATUS — `/runs/wait` throws on agent error instead of returning the values
+- **File**: `src/modules/runs/runs.service.ts` (`wait()` catch block)
+- **Description**: Official `/runs/wait` returns the graph's state values regardless of terminal status (`success`, `error`, `interrupted`); the run record carries the status, the response carries the values. lg-api currently throws on `agentExecutor.execute` failure, sending a 5xx, so clients lose any partial state. After the LG-WAIT-FLATTEN fix this is no longer hidden by the wrapper — it's now visible to callers.
+- **Severity**: Medium (chat UIs that want to render error state can't)
+- **Recommendation**: On error, still write the run as `status: error`, but return the current `thread.values` (with an appended assistant message describing the error) at the response root, matching the official contract. Stateless runs return whatever partial state the agent produced before failing.
+
+### LG-STREAM-MODE-HONOR — `/runs/stream` ignores the `stream_mode` request field
+- **File**: `src/modules/runs/runs.service.ts` (`streamRun()`)
+- **Description**: The official LangGraph stream emits events according to `stream_mode` (`values`, `updates`, `messages`, `debug`, `tasks`, `checkpoints`, `events` — any subset). lg-api currently emits `metadata` → `values` → `end` regardless. Clients asking for `updates` or token-by-token `messages` get the wrong events.
+- **Severity**: Medium (chat UIs work; SDK clients using non-default modes break)
+- **Recommendation**: Read `request.stream_mode` (already in `RunCreateRequestSchema`) and emit only the requested event types. For `messages` mode, the agent's CLI contract must expose token streaming too — track separately as LG-STREAM-LIVE-EXECUTION.
+
+### LG-STREAM-LIVE-EXECUTION — stream is faked: agent runs to completion before any SSE event is emitted
+- **File**: `src/modules/runs/runs.service.ts` (`streamRun()` lines 605–650 area), `src/agents/cli-connector.ts`, `src/agents/types.ts` (`AgentStreamEvent`)
+- **Description**: `streamRun` currently calls `agentExecutor.execute` (synchronous, returns the full response), then yields one `metadata` + one `values` + one `end` event from the resulting state. The official LangGraph server emits events progressively as the graph executes — one `values` per graph step, one `messages/partial` per LLM token, etc. lg-api's behavior breaks token-by-token chat UIs and any debugger that watches step-by-step state evolution.
+- **Severity**: Medium (only matters once a UI/debugger needs live streaming)
+- **Recommendation**: Define a streaming agent contract (CLI agent emits one JSON event per stdout line — `{event, data}` records — instead of one final blob). Update `CliAgentConnector.streamAgent` to forward each chunk as it arrives. Update `streamRun` to forward agent events directly to the SSE channel, including `messages/partial` for token chunks. Non-trivial design change; deferred.
+
+### LG-STREAM-END-EVENT — `end: null` terminator is non-canonical
+- **File**: `src/modules/runs/runs.service.ts` (`streamRun()` final `yield`)
+- **Description**: lg-api emits an explicit `event: end\ndata: null\n\n` event before closing the SSE stream. The official LangGraph server just closes the connection (SSE EOF). Kept deliberately for back-compat with current consumers (e.g. agent-chat-ui) that listen for the `end` marker. Documenting here so it's not lost.
+- **Severity**: Low (intentional divergence pending consumer migration)
+- **Recommendation**: When consumers no longer rely on `event: end`, drop the terminator and rely on SSE EOF.
+
 ---
 
 ---
 
 ## Completed Items
+
+### LG-WAIT-FLATTEN, LG-WAIT-FULL-STATE, LG-MESSAGE-SCHEMA, LG-STREAM-FLATTEN-VALUES, LG-STREAM-METADATA-PAYLOAD — `/runs/wait` and `/runs/stream` aligned with official LangGraph contract
+- **Date**: 2026-05-27
+- **Files**: `src/modules/runs/runs.service.ts` (`wait()`, `streamRun()`, `updateThreadState()`, new `toLangChainMessage()` helper), `src/schemas/run.schema.ts` (`RunWaitResponseSchema`), `test_scripts/runs.test.ts`
+- **Issue**: `POST /runs/wait` and `POST /threads/:id/runs/wait` returned a non-canonical `{run_id, thread_id, status, result: {messages}}` envelope; the official LangGraph Platform returns the graph's final state values at the response root (e.g. `{messages: [...], <other_state_keys>}`). On the wait response, the wrapper hid `messages` one level deep so the NBG .NET orchestrator (`AgentCommunicationService.SendChatMessageAsync` → `chatResponse.Messages.LastOrDefault(m => m.Type == "ai")`) couldn't find any AI message and fell back to the synthetic `"Error processing request with conversation history"` on every handoff call. The `values` SSE event in `/runs/stream` carried only `{messages: [...]}`, dropping every other state channel (e.g. `organization_name`, `payment_code`, `memory`). Messages were also missing the LangChain shape fields (`additional_kwargs`, `name`, `example`, plus AI-specific `tool_calls`, `invalid_tool_calls`, `usage_metadata`) that the SDK deserializer expects.
+- **Fix**: `wait()` return type changed to `Promise<Record<string, unknown>>`; returns the post-run thread `values` at root for stateful runs (read freshly after `updateThreadState`) or a synthesized state for stateless runs. `RunWaitResponseSchema` simplified to `Type.Record(Type.String(), Type.Unknown())`. `streamRun()` `values` event now carries the full state values at root, not just `{messages}`; `metadata` event payload now `{run_id, attempt: 1, thread_id}` per spec (kept `thread_id` for back-compat with agent-chat-ui). New `toLangChainMessage(m)` helper produces the full LangChain message shape and is used by both `wait()`, `streamRun()`, and `updateThreadState()` so every persisted/returned message matches the SDK. Updated the two `runs.test.ts` cases that asserted the old envelope (`result.run_id`, `result.status`, `result.result.messages`) to verify the new flat shape (`body.messages` at root, no `result`/`run_id`). `npx tsc --noEmit` clean; full lg-api suite green (196/196 across 12 files); pre-existing unrelated `skill-agent.test.ts` failures left untouched. agent-chat-ui compatibility preserved (it reads `messages` from each `values` SSE event, which is still present). Production impact: the NBG .NET orchestrator's `/runs/wait` deserialization now finds AI messages, eliminating the `"Error processing request with conversation history"` fallback on handoff calls.
+
+
 
 ### P10 — Manual `POST /state` flattened to match the canonical convention (divergence closed)
 - **Date**: 2026-05-27

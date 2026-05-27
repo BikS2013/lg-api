@@ -447,12 +447,12 @@ describe('Runs API', () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.payload);
-      expect(body).toHaveProperty('run_id');
-      expect(body).toHaveProperty('thread_id', threadId);
-      expect(body).toHaveProperty('status');
-      expect(body).toHaveProperty('result');
-      expect(body.result).toHaveProperty('messages');
-      expect(Array.isArray(body.result.messages)).toBe(true);
+      // LangGraph contract: /runs/wait returns graph state values at root.
+      // No run_id / status / result envelope.
+      expect(body).toHaveProperty('messages');
+      expect(Array.isArray(body.messages)).toBe(true);
+      expect(body).not.toHaveProperty('result');
+      expect(body).not.toHaveProperty('run_id');
     });
 
     it('should return 404 for non-existent thread by default (matches real LangGraph)', async () => {
@@ -483,8 +483,9 @@ describe('Runs API', () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.payload);
-      expect(body).toHaveProperty('thread_id', threadId);
-      expect(body).toHaveProperty('status', 'success');
+      // /runs/wait returns state values at root — no thread_id / status keys.
+      expect(body).toHaveProperty('messages');
+      expect(Array.isArray(body.messages)).toBe(true);
 
       // Verify the thread was actually persisted in the shared repo
       const created = await threadsService.get(threadId);

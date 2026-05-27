@@ -20,7 +20,7 @@ import { AgentExecutor } from '../../agents/agent-executor.js';
 import { AssistantResolver } from '../../agents/assistant-resolver.js';
 import { RequestComposer } from '../../agents/request-composer.js';
 import { reduceChannels } from '../../agents/state-reducer.js';
-import type { AgentResponse, StreamEvent as AgentStreamEvent } from '../../agents/types.js';
+import type { AgentMessage, AgentResponse, StreamEvent as AgentStreamEvent } from '../../agents/types.js';
 import type { RunStatus, StreamMode } from '../../types/index.js';
 import { generateId } from '../../utils/uuid.util.js';
 import { nowISO } from '../../utils/date.util.js';
@@ -399,10 +399,17 @@ export class RunsService {
    * Wait for a run: creates a run, executes the agent synchronously,
    * and returns the result with agent response messages.
    */
+  /**
+   * Per the LangGraph Platform contract, `/runs/wait` returns the graph's final
+   * state values at the response root (e.g. `{ messages: [...], <state_keys> }`).
+   * No `{ run_id, status, result }` envelope — run metadata lives on
+   * `GET /threads/:id/runs/:run_id`. See Issues - Pending Items.md
+   * (LG-WAIT-FLATTEN).
+   */
   async wait(
     threadId: string | null,
     request: RunCreateRequest,
-  ): Promise<{ run_id: string; thread_id: string | null; status: RunStatus; result: Record<string, unknown> }> {
+  ): Promise<Record<string, unknown>> {
     // Resolve assistant
     const assistant = await this.assistantResolver.resolve(request.assistant_id);
 
@@ -490,19 +497,33 @@ export class RunsService {
         updated_at: nowISO(),
       });
 
-      return {
-        run_id: runId,
-        thread_id: threadId,
-        status: 'success' as RunStatus,
-        result: {
-          messages: agentResponse.messages.map((m) => ({
-            type: m.role === 'assistant' ? 'ai' : m.role === 'user' ? 'human' : 'system',
-            content: m.content,
-            id: generateId(),
-            ...(m.response_metadata ? { response_metadata: m.response_metadata } : {}),
-          })),
-        },
-      };
+      // Compose the final state values to return.
+      // Stateful: read the just-updated thread state so the response reflects
+      //   the canonical post-run state (all channels: messages + custom keys).
+      // Stateless: build the values from the agent response since no thread
+      //   state was persisted.
+      let stateValues: Record<string, unknown>;
+      if (threadId) {
+        const updatedState = await this.threadsRepository.getState(threadId);
+        stateValues = (updatedState?.['values'] as Record<string, unknown>) ?? {};
+      } else {
+        const stateless = (currentState['values'] as Record<string, unknown>) ?? {};
+        const existing = (stateless['messages'] as unknown[]) ?? [];
+        const inputMessages = ((request.input as Record<string, unknown>)?.['messages'] as unknown[]) ?? [];
+        const normalizedInput = inputMessages.map((m) =>
+          this.toLangChainMessage(m as Record<string, unknown>),
+        );
+        const responseMessages = agentResponse.messages.map((m) =>
+          this.toLangChainMessage(m),
+        );
+        stateValues = {
+          ...stateless,
+          ...(agentResponse.state ?? {}),
+          messages: [...existing, ...normalizedInput, ...responseMessages],
+        };
+      }
+
+      return stateValues;
     } catch (error: unknown) {
       // Set run to error
       await this.runsRepository.update(runId, {
@@ -612,19 +633,42 @@ export class RunsService {
         await this.updateThreadState(threadId, request, agentResponse, currentState);
       }
 
-      // Read the full thread state (updated above) for the values event
+      // Read the full thread state (updated above) for the values event.
+      // Per the LangGraph stream contract, the `values` event carries the
+      // FULL graph state values at root — every channel (messages + custom
+      // keys like organization_name, payment_code, memory, etc.), not just
+      // `messages`. See Issues - Pending Items.md (LG-STREAM-FLATTEN-VALUES).
       const updatedState = threadId
         ? await this.threadsRepository.getState(threadId)
         : null;
-      const allMessages = (updatedState?.['values'] as Record<string, unknown>)?.['messages'] as unknown[] ?? [];
-
-      // Emit SSE events: values has full thread state
-      async function* responseToStream(): AsyncGenerator<AgentStreamEvent> {
-        yield { event: 'metadata', data: { run_id: runId, thread_id: threadId } };
-        yield {
-          event: 'values',
-          data: { messages: allMessages },
+      let valuesPayload: Record<string, unknown>;
+      if (threadId) {
+        valuesPayload = (updatedState?.['values'] as Record<string, unknown>) ?? {};
+      } else {
+        // Stateless run — synthesize state from input + agent response.
+        const inputMessages = ((request.input as Record<string, unknown>)?.['messages'] as unknown[]) ?? [];
+        const normalizedInput = inputMessages.map((m) =>
+          this.toLangChainMessage(m as Record<string, unknown>),
+        );
+        const responseMessages = agentResponse.messages.map((m) =>
+          this.toLangChainMessage(m),
+        );
+        valuesPayload = {
+          ...(agentResponse.state ?? {}),
+          messages: [...normalizedInput, ...responseMessages],
         };
+      }
+
+      // Emit SSE events. `metadata` carries `{run_id, attempt}` per LangGraph
+      // spec (thread_id retained for backwards compat with agent-chat-ui
+      // consumers that read it). `end` retained to avoid breaking existing
+      // SSE consumers that close on the explicit terminator.
+      async function* responseToStream(): AsyncGenerator<AgentStreamEvent> {
+        yield {
+          event: 'metadata',
+          data: { run_id: runId, attempt: 1, thread_id: threadId },
+        };
+        yield { event: 'values', data: valuesPayload };
         yield { event: 'end', data: null };
       }
       await this.streamEmitter.streamFromAgent(reply, run, responseToStream());
@@ -736,13 +780,14 @@ export class RunsService {
     const stateValues = (currentState?.['values'] as Record<string, unknown>) ?? {};
     const existingMessages = (stateValues['messages'] as unknown[]) || [];
     const inputMessages = ((request.input as Record<string, unknown>)?.['messages'] as unknown[]) || [];
-    const responseMessages = agentResponse.messages.map((m) => ({
-      type: m.role === 'assistant' ? 'ai' : m.role === 'user' ? 'human' : 'system',
-      content: m.content,
-      id: generateId(),
-      ...(m.response_metadata ? { response_metadata: m.response_metadata } : {}),
-    }));
-    const allMessages = [...existingMessages, ...inputMessages, ...responseMessages];
+    const responseMessages = agentResponse.messages.map((m) =>
+      this.toLangChainMessage(m),
+    );
+    const allMessages = [
+      ...existingMessages,
+      ...inputMessages.map((m) => this.toLangChainMessage(m as Record<string, unknown>)),
+      ...responseMessages,
+    ];
 
     const now = nowISO();
     // Persist the agent's returned state at the **top level** of `values`
@@ -781,6 +826,40 @@ export class RunsService {
       values: newValues,
       updated_at: now,
     });
+  }
+
+  /**
+   * Convert an internal AgentMessage (or a raw input-message-shaped object)
+   * into the LangChain message shape that LangGraph Platform emits on the
+   * wire. The SDK strictly deserializes these fields; missing keys cause
+   * downstream clients (e.g. the NBG .NET orchestrator) to silently drop
+   * messages.
+   */
+  private toLangChainMessage(m: Record<string, unknown> | AgentMessage): Record<string, unknown> {
+    const obj = m as Record<string, unknown>;
+    const rawRole = (obj['role'] as string | undefined) ?? '';
+    const explicitType = obj['type'] as string | undefined;
+    const type =
+      explicitType ??
+      (rawRole === 'assistant' ? 'ai' : rawRole === 'user' ? 'human' : rawRole === 'system' ? 'system' : 'human');
+    const base: Record<string, unknown> = {
+      content: obj['content'] ?? '',
+      additional_kwargs: (obj['additional_kwargs'] as Record<string, unknown> | undefined) ?? {},
+      response_metadata: (obj['response_metadata'] as Record<string, unknown> | undefined) ?? {},
+      type,
+      name: (obj['name'] as string | null | undefined) ?? null,
+      id: (obj['id'] as string | undefined) ?? generateId(),
+      example: (obj['example'] as boolean | undefined) ?? false,
+    };
+    if (type === 'ai') {
+      return {
+        ...base,
+        tool_calls: (obj['tool_calls'] as unknown[] | undefined) ?? [],
+        invalid_tool_calls: (obj['invalid_tool_calls'] as unknown[] | undefined) ?? [],
+        usage_metadata: (obj['usage_metadata'] as Record<string, unknown> | null | undefined) ?? null,
+      };
+    }
+    return base;
   }
 
   /**
