@@ -5,8 +5,7 @@ slug: f1-runs-index-fix
 date: 2026-05-28
 status: draft
 produced_by: spec-writer
-consumes:
-  - /Users/zisisflokas/projects/agents/lg-api/artifacts/research/2026-05-28-lg-api-azure-blob-multi-user-concurrency.md
+consumes: []
 related:
   adrs: []
   glossary: none
@@ -51,7 +50,9 @@ The user has asked for **"the cleanest yet minimal solution to address F1, propo
 
 ## Background
 
-`AzureBlobRunStorage` was implemented with a single global index blob because `getById(runId)` has no thread context. For stateful runs the canonical storage path is `{thread_id}/{run_id}.json` — the `thread_id` segment cannot be recovered from a `run_id` alone, so a runId-only lookup must consult *some* secondary structure. The first author chose the simplest available structure: one shared JSON object. That works for a single Node.js process under low contention; under any real concurrency, it breaks as described in F1 of the upstream investigation (`artifacts/research/2026-05-28-lg-api-azure-blob-multi-user-concurrency.md`).
+`AzureBlobRunStorage` was implemented with a single global index blob because `getById(runId)` has no thread context. For stateful runs the canonical storage path is `{thread_id}/{run_id}.json` — the `thread_id` segment cannot be recovered from a `run_id` alone, so a runId-only lookup must consult *some* secondary structure. The first author chose the simplest available structure: one shared JSON object. That works for a single Node.js process under low contention; under any real concurrency, it breaks.
+
+**Investigation summary (F1).** `create()` and `delete()` maintained that shared `_index.json` blob via download → mutate-in-memory → upload, with no ETag, no lease, no retry. Two concurrent `create()` calls race: both download the same snapshot, both add their own `run_id → path` entry in memory, and whichever `uploadJson` lands second overwrites the first — silently dropping the loser's mapping. The clobbered run still exists at its canonical blob path but becomes unreachable through every `getById(runId)` caller (`GET` / `PATCH` / `cancel` / `delete` / `join` / `stream-rejoin`). The blob also grows unboundedly (one entry per run ever created), so contention probability and per-call latency rise with traffic. This was the highest-severity, lowest-blast-radius finding of the multi-user concurrency investigation — it blocks safe horizontal scale-out — which is why it is fixed first and independently. Sibling read-modify-write findings (F2 thread-state append, F3 update-412-as-500, F4 store `putItem`) are tracked separately in `Issues - Pending Items.md`.
 
 Three constraints frame the redesign:
 
