@@ -148,11 +148,22 @@ export class AzureBlobRunStorage implements IRunStorage {
   }
 
   async count(filters?: Record<string, unknown>): Promise<number> {
-    // List all blobs and count. Excludes:
-    //   - any orphan `_index.json` left behind by a pre-A1 deployment (defensive
-    //     — the code no longer reads or writes it, but the blob may still exist
-    //     in the container until an operator deletes it),
-    //   - all per-run lookup pointers under the `_lookup/` prefix.
+    // Fast path: an unfiltered count is exactly the number of per-run lookup
+    // pointers. Each run writes exactly one `_lookup/{run_id}.json` at create and
+    // removes it at delete, so the `_lookup/` prefix is a 1:1 census of runs
+    // reachable by id. Enumerating that prefix lists ~half the blobs that listing
+    // the whole container would (a run blob *and* a pointer exist per run), and it
+    // is consistent with getById: a run with no pointer is not reachable by id and
+    // is not counted. (A pre-A1 run becomes counted once the migration script
+    // writes its pointer.)
+    if (!filters || Object.keys(filters).length === 0) {
+      const pointers = await listBlobsByPrefix(this.containerClient, '_lookup/');
+      return pointers.length;
+    }
+
+    // Filtered counts need run contents, so enumerate the run blobs themselves —
+    // everything except the lookup pointers and any orphan `_index.json` left by a
+    // pre-A1 deployment — then download and apply the filters.
     const allBlobs = await listBlobsByPrefix(this.containerClient, '');
     const runBlobs = allBlobs.filter(
       (b) =>
@@ -161,11 +172,6 @@ export class AzureBlobRunStorage implements IRunStorage {
         !b.name.startsWith('_lookup/'),
     );
 
-    if (!filters || Object.keys(filters).length === 0) {
-      return runBlobs.length;
-    }
-
-    // With filters, download and filter
     const runs: Run[] = [];
     for (const blob of runBlobs) {
       const run = await downloadJson<Run>(this.containerClient, blob.name);

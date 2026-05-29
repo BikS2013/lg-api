@@ -245,6 +245,33 @@ describe('AzureBlobRunStorage — F1 lost-update fix (A1 per-run lookup blobs)',
     expect(await storage.count()).toBe(3);
   });
 
+  it('count() (unfiltered) counts _lookup/ pointers — an unmigrated run blob with no pointer is not counted', async () => {
+    // Two runs created the canonical way (each gets a _lookup/ pointer).
+    await storage.create(makeRun());
+    await storage.create(makeRun());
+
+    // Simulate a pre-A1 / unmigrated run: a run blob exists but has NO pointer.
+    // The old count() (enumerate-all-run-blobs) would have counted it as a 3rd
+    // run; the pointer-based count must NOT — it is unreachable by id until the
+    // migration writes its pointer. This both documents the semantic and proves
+    // count() resolves through the _lookup/ prefix.
+    const orphan = makeRun();
+    container.blobs.set(`${orphan.thread_id}/${orphan.run_id}.json`, {
+      content: JSON.stringify(orphan),
+    });
+
+    expect(await storage.count()).toBe(2);
+  });
+
+  it('count() (filtered) downloads run blobs and applies the filter', async () => {
+    await storage.create(makeRun({ status: 'pending' }));
+    await storage.create(makeRun({ status: 'pending' }));
+    await storage.create(makeRun({ status: 'success' }));
+
+    expect(await storage.count({ status: 'success' })).toBe(1);
+    expect(await storage.count({ status: 'pending' })).toBe(2);
+  });
+
   it('survives the F1 race: two interleaved concurrent creates both remain reachable', async () => {
     // This is the load-bearing assertion. With the original updateIndex()
     // implementation (download -> mutate -> upload of a shared _index.json),
