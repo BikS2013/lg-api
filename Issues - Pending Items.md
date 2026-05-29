@@ -2,6 +2,24 @@
 
 ## Pending Items
 
+### F3-AZBLOB-RUN-UPDATE-412 — `Run.update()` / `Thread.update()` ETag 412s surface as 500s on cancel-vs-finish race
+- **Files**: `src/modules/runs/runs.service.ts` (`cancel()` ~line 300, the background `setImmediate` blocks in `createStateful()`/`createStateless()` that set `running`/`success`/`error`, and the `idle` thread updates), `src/storage/providers/azure-blob/azure-blob-run-storage.ts` (`update()`), `src/storage/providers/azure-blob/azure-blob-thread-storage.ts`
+- **Description**: `AzureBlobRunStorage.update()` correctly uses ETag `If-Match`, but no caller catches the 412 conflict. When a user cancels a run in the same ~tens-of-ms window the agent worker writes the run's terminal state, both read the same ETag and the loser's `uploadJsonWithEtag` throws 412 → bubbles to the route → HTTP 500. The user clicked cancel on a still-running run and got a 500, even though the run actually ended. Same shape on the `Thread.status = idle` write. Reverse order (agent finishes first) is fine — the cancel guard returns a clean 409. Loud (500), not silent; low frequency (one blob round-trip window); worse under multi-replica. From investigation `artifacts/research/2026-05-28-lg-api-azure-blob-multi-user-concurrency.md` (F3).
+- **Severity**: Medium
+- **Recommendation**: Wrap the ETag read-modify-write in a bounded retry-on-412 helper (`isConflictError` already exists in `azure-blob-helpers.ts`); on exhaustion, re-read and return 409 if the run is now terminal. Apply to the four `update()` call paths (run + thread). Candidate for a focused `/spec` + `/patch`.
+
+### F2-AZBLOB-THREAD-STATE-LOSTUPDATE — thread-state history append can silently drop messages on concurrent same-thread runs
+- **Files**: `src/modules/runs/runs.service.ts` (`updateThreadState()` ~lines 774–828), `src/storage/providers/azure-blob/azure-blob-thread-storage.ts` (`addState()`/`getState()`)
+- **Description**: `updateThreadState` reads thread state, computes previous+this-turn, and writes a new timestamped history blob; `getState` returns the highest-sorting blob. Two runs on the *same thread* both read state S0, each write S0+their-turn, the later timestamp wins, and the other turn's user+assistant messages silently vanish on the next read. The mirror write to `Thread.values` is ETag-protected so the loser also gets a 500 (see F3). **Discounted** under the project's one-user-per-thread model ([[project-thread-ownership-model]]) — but a single user with two browser tabs or a flaky reconnect can still produce two in-flight requests on one thread. From investigation (F2). The migration to flat state ([[LG-STATE-CANONICAL]] / P11) shares the same RMW shape.
+- **Severity**: Medium (impact high — silent data loss; likelihood low given the usage model)
+- **Recommendation**: Only if observed in practice — carry a `parent_state_etag` through the state object and make `addState` ETag-conditional with retry, or wrap the per-thread RMW in a blob lease. Otherwise document the single-writer-per-thread assumption as load-bearing.
+
+### F4-AZBLOB-STORE-PUTITEM-LOSTUPDATE — `AzureBlobStoreStorage.putItem()` is an unguarded read-modify-write
+- **Files**: `src/storage/providers/azure-blob/azure-blob-store-storage.ts` (`putItem()` ~lines 42–86)
+- **Description**: `putItem()` reads the item, merges, and writes back with no ETag/lease — the same lost-update shape as F1 but on the `/store` API. Two concurrent writes to the same `(namespace, key)` race; the later write clobbers the earlier. Whether it bites depends on whether the `/store` API is used as a shared multi-writer KV. From investigation (F4).
+- **Severity**: Medium-Low (usage-dependent)
+- **Recommendation**: ETag-conditional write with retry-on-412 (single call site), mirroring the F3 fix. Decide first whether `/store` is ever multi-writer in practice.
+
 ### P1 - Repositories use local inline types instead of shared types from types/index.ts
 - **Files**: `src/modules/assistants/assistants.repository.ts`, `src/modules/threads/threads.repository.ts`, `src/modules/runs/runs.repository.ts`, `src/modules/crons/crons.repository.ts`, `src/modules/store/store.repository.ts`
 - **Description**: Each repository defines its own inline interface (e.g., `Assistant`, `Thread`, `Run`, `Cron`, `Item`) with comments saying "will be replaced with the shared type from types/index.ts". The shared types exist in `src/types/index.ts` but are not used by repositories or services. This creates a risk of type drift between the schema-derived types and the inline types.
