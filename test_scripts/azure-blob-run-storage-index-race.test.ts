@@ -192,11 +192,9 @@ describe('AzureBlobRunStorage — F1 lost-update fix (A1 per-run lookup blobs)',
   });
 
   it('getById() does NOT read _index.json (clean cutover — no legacy fallback)', async () => {
-    // Simulate a pre-A1 deployment whose data was never migrated: a run blob
-    // exists, and the only pointer to it is the legacy _index.json. Under the
-    // clean cutover, the lookup must NOT consult _index.json and the run must
-    // be unreachable by id — operators are required to run the migration
-    // script before deploying this version.
+    // Simulate a run created by the previous code: a run blob exists, and the
+    // only pointer to it is the legacy _index.json. Under the clean cutover the
+    // lookup must NOT consult _index.json, so the run is unreachable by id.
     const run = makeRun();
     const runBlobName = `${run.thread_id}/${run.run_id}.json`;
     container.blobs.set(runBlobName, { content: JSON.stringify(run) });
@@ -245,16 +243,15 @@ describe('AzureBlobRunStorage — F1 lost-update fix (A1 per-run lookup blobs)',
     expect(await storage.count()).toBe(3);
   });
 
-  it('count() (unfiltered) counts _lookup/ pointers — an unmigrated run blob with no pointer is not counted', async () => {
+  it('count() (unfiltered) counts _lookup/ pointers — a run blob with no pointer is not counted', async () => {
     // Two runs created the canonical way (each gets a _lookup/ pointer).
     await storage.create(makeRun());
     await storage.create(makeRun());
 
-    // Simulate a pre-A1 / unmigrated run: a run blob exists but has NO pointer.
+    // Simulate a run from the previous code: a run blob exists but has NO pointer.
     // The old count() (enumerate-all-run-blobs) would have counted it as a 3rd
-    // run; the pointer-based count must NOT — it is unreachable by id until the
-    // migration writes its pointer. This both documents the semantic and proves
-    // count() resolves through the _lookup/ prefix.
+    // run; the pointer-based count must NOT — it is unreachable by id. This both
+    // documents the semantic and proves count() resolves through the _lookup/ prefix.
     const orphan = makeRun();
     container.blobs.set(`${orphan.thread_id}/${orphan.run_id}.json`, {
       content: JSON.stringify(orphan),

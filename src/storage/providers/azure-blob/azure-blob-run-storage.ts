@@ -9,14 +9,14 @@
  *
  * runId -> blob path resolution uses per-run pointer blobs under the `_lookup/`
  * prefix (one tiny blob per run, written once at create, deleted at delete,
- * never mutated). This replaces the historical shared `_index.json` whose
- * read-modify-write semantics raced under concurrent creates (F1).
- * See artifacts/specs/f1-runs-index-fix.md for the design and migration plan.
+ * never mutated). This replaces a historical shared `_index.json` whose
+ * read-modify-write semantics dropped entries under concurrent creates.
  *
  * Clean cutover: the legacy `_index.json` is neither read nor written by this
- * provider. Deployments with pre-A1 data MUST run the migration script
- * (`scripts/migrate-azure-blob-run-index.ts`) BEFORE deploying this version,
- * otherwise stateful runs created by older code will not be reachable by id.
+ * provider. Runs created by the previous code exist only in that old index, so
+ * they are not reachable by id after this change; fresh deployments are
+ * unaffected. (Back-filling `_lookup/` pointers from existing run blobs is
+ * straightforward but intentionally out of scope here.)
  */
 
 import type { ContainerClient } from '@azure/storage-blob';
@@ -54,7 +54,7 @@ export class AzureBlobRunStorage implements IRunStorage {
     });
     // Order matters: write the run blob first, the lookup pointer second.
     // If the lookup write fails, the run blob still exists at its canonical
-    // path and the migration / rebuild script can re-create the pointer.
+    // path (a pointer can be re-derived from it later if needed).
     // The reverse asymmetry (lookup exists, run blob missing) cannot arise:
     // an upload failure on the run blob throws before the lookup write runs.
     await uploadJson(this.containerClient, blobName, run, tags);
@@ -154,16 +154,15 @@ export class AzureBlobRunStorage implements IRunStorage {
     // reachable by id. Enumerating that prefix lists ~half the blobs that listing
     // the whole container would (a run blob *and* a pointer exist per run), and it
     // is consistent with getById: a run with no pointer is not reachable by id and
-    // is not counted. (A pre-A1 run becomes counted once the migration script
-    // writes its pointer.)
+    // is not counted.
     if (!filters || Object.keys(filters).length === 0) {
       const pointers = await listBlobsByPrefix(this.containerClient, '_lookup/');
       return pointers.length;
     }
 
     // Filtered counts need run contents, so enumerate the run blobs themselves —
-    // everything except the lookup pointers and any orphan `_index.json` left by a
-    // pre-A1 deployment — then download and apply the filters.
+    // everything except the lookup pointers and any orphan `_index.json` left by
+    // an older deployment — then download and apply the filters.
     const allBlobs = await listBlobsByPrefix(this.containerClient, '');
     const runBlobs = allBlobs.filter(
       (b) =>
@@ -241,9 +240,8 @@ export class AzureBlobRunStorage implements IRunStorage {
    * Read the per-run lookup pointer blob and return the run blob's path.
    *
    * Returns null if the lookup blob does not exist — the signal for a
-   * never-existed run, or for a run created by a pre-A1 deployment whose
-   * data has not been migrated yet (see the migration script referenced
-   * in the file header).
+   * never-existed run, or for a run created by the previous code (which wrote
+   * no pointer; see the clean-cutover note in the file header).
    */
   private async lookupBlobPath(runId: string): Promise<string | null> {
     const pointer = await downloadJson<{ path: string }>(
