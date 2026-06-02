@@ -6,6 +6,17 @@
  * - Stateless runs: stateless/{run_id}.json
  *
  * Blob index tags are used for: runId, threadId, status, assistantId.
+ *
+ * runId -> blob path resolution uses per-run pointer blobs under the `_lookup/`
+ * prefix (one tiny blob per run, written once at create, deleted at delete,
+ * never mutated). This replaces a historical shared `_index.json` whose
+ * read-modify-write semantics dropped entries under concurrent creates.
+ *
+ * Clean cutover: the legacy `_index.json` is neither read nor written by this
+ * provider. Runs created by the previous code exist only in that old index, so
+ * they are not reachable by id after this change; fresh deployments are
+ * unaffected. (Back-filling `_lookup/` pointers from existing run blobs is
+ * straightforward but intentionally out of scope here.)
  */
 
 import type { ContainerClient } from '@azure/storage-blob';
@@ -25,11 +36,6 @@ import {
 } from './azure-blob-helpers.js';
 import { resolveCreateArgs } from '../../compat.js';
 
-/** Index blob that maps run_id to its blob path for direct lookup. */
-interface RunIndex {
-  [runId: string]: string;
-}
-
 export class AzureBlobRunStorage implements IRunStorage {
   private containerClient: ContainerClient;
 
@@ -46,23 +52,26 @@ export class AzureBlobRunStorage implements IRunStorage {
       status: run.status,
       assistantId: run.assistant_id,
     });
+    // Order matters: write the run blob first, the lookup pointer second.
+    // If the lookup write fails, the run blob still exists at its canonical
+    // path (a pointer can be re-derived from it later if needed).
+    // The reverse asymmetry (lookup exists, run blob missing) cannot arise:
+    // an upload failure on the run blob throws before the lookup write runs.
     await uploadJson(this.containerClient, blobName, run, tags);
-
-    // Update the run index for direct lookup by run_id
-    await this.updateIndex(run.run_id, blobName);
-
+    await this.writeLookup(run.run_id, blobName);
     return run;
   }
 
   async getById(runId: string): Promise<Run | null> {
-    // Look up the blob path from the index
-    const blobPath = await this.lookupIndex(runId);
+    // Primary path: per-run pointer blob written by create().
+    const blobPath = await this.lookupBlobPath(runId);
     if (blobPath) {
       const run = await downloadJson<Run>(this.containerClient, blobPath);
       if (run) return run;
     }
 
-    // Fallback: search in stateless directory
+    // Deterministic stateless path: stateless runs always live at
+    // stateless/{run_id}.json — no pointer indirection needed.
     const statelessPath = `stateless/${runId}.json`;
     return downloadJson<Run>(this.containerClient, statelessPath);
   }
@@ -99,9 +108,11 @@ export class AzureBlobRunStorage implements IRunStorage {
 
     const result = await deleteBlob(this.containerClient, blobPath);
 
-    // Remove from index
     if (result) {
-      await this.removeFromIndex(runId);
+      // Best-effort cleanup of the lookup pointer. deleteBlob is idempotent
+      // (returns false on 404), so a missing lookup blob — e.g., a run created
+      // by the OLD code path that never wrote one — is a no-op.
+      await this.deleteLookup(runId);
     }
 
     return result;
@@ -137,17 +148,29 @@ export class AzureBlobRunStorage implements IRunStorage {
   }
 
   async count(filters?: Record<string, unknown>): Promise<number> {
-    // List all blobs and count
-    const allBlobs = await listBlobsByPrefix(this.containerClient, '');
-    const runBlobs = allBlobs.filter(
-      (b) => b.name.endsWith('.json') && b.name !== '_index.json',
-    );
-
+    // Fast path: an unfiltered count is exactly the number of per-run lookup
+    // pointers. Each run writes exactly one `_lookup/{run_id}.json` at create and
+    // removes it at delete, so the `_lookup/` prefix is a 1:1 census of runs
+    // reachable by id. Enumerating that prefix lists ~half the blobs that listing
+    // the whole container would (a run blob *and* a pointer exist per run), and it
+    // is consistent with getById: a run with no pointer is not reachable by id and
+    // is not counted.
     if (!filters || Object.keys(filters).length === 0) {
-      return runBlobs.length;
+      const pointers = await listBlobsByPrefix(this.containerClient, '_lookup/');
+      return pointers.length;
     }
 
-    // With filters, download and filter
+    // Filtered counts need run contents, so enumerate the run blobs themselves —
+    // everything except the lookup pointers and any orphan `_index.json` left by
+    // an older deployment — then download and apply the filters.
+    const allBlobs = await listBlobsByPrefix(this.containerClient, '');
+    const runBlobs = allBlobs.filter(
+      (b) =>
+        b.name.endsWith('.json') &&
+        b.name !== '_index.json' &&
+        !b.name.startsWith('_lookup/'),
+    );
+
     const runs: Run[] = [];
     for (const blob of runBlobs) {
       const run = await downloadJson<Run>(this.containerClient, blob.name);
@@ -171,16 +194,17 @@ export class AzureBlobRunStorage implements IRunStorage {
   }
 
   /**
-   * Resolve the blob path for a run by checking the index, then falling back to search.
+   * Resolve the blob path for a run by reading its per-run lookup pointer,
+   * then falling back to the deterministic stateless path.
    */
   private async resolveBlobPath(runId: string): Promise<string | null> {
-    // Check index first
-    const indexPath = await this.lookupIndex(runId);
-    if (indexPath) {
-      return indexPath;
+    // Primary: per-run lookup pointer.
+    const pointerPath = await this.lookupBlobPath(runId);
+    if (pointerPath) {
+      return pointerPath;
     }
 
-    // Fallback: check stateless
+    // Fallback: deterministic stateless path.
     const statelessPath = `stateless/${runId}.json`;
     const statelessRun = await downloadJson<Run>(this.containerClient, statelessPath);
     if (statelessRun) {
@@ -191,37 +215,49 @@ export class AzureBlobRunStorage implements IRunStorage {
   }
 
   /**
-   * Update the run index blob with a new run_id -> blob_path mapping.
+   * Build the canonical lookup blob path for a given run_id.
+   *
+   * Lookup blobs live under the `_lookup/` prefix in the runs container and
+   * each contains a single field — `{ "path": "<canonical run blob path>" }`.
+   * They are written once at create() time, deleted once at delete() time,
+   * and never mutated in between.
    */
-  private async updateIndex(runId: string, blobPath: string): Promise<void> {
-    const indexBlobName = '_index.json';
-    const existing = await downloadJson<RunIndex>(this.containerClient, indexBlobName);
-    const index: RunIndex = existing ?? {};
-    index[runId] = blobPath;
-    await uploadJson(this.containerClient, indexBlobName, index);
+  private lookupBlobName(runId: string): string {
+    return `_lookup/${runId}.json`;
   }
 
   /**
-   * Look up a run's blob path from the index.
+   * Write the per-run lookup pointer blob.
+   *
+   * Unconditional single-writer PUT to a unique blob name — no read-modify-write,
+   * no shared key, no race. Replaces the historical `updateIndex()`.
    */
-  private async lookupIndex(runId: string): Promise<string | null> {
-    const indexBlobName = '_index.json';
-    const index = await downloadJson<RunIndex>(this.containerClient, indexBlobName);
-    if (index && index[runId]) {
-      return index[runId];
-    }
-    return null;
+  private async writeLookup(runId: string, blobPath: string): Promise<void> {
+    await uploadJson(this.containerClient, this.lookupBlobName(runId), { path: blobPath });
   }
 
   /**
-   * Remove a run_id from the index.
+   * Read the per-run lookup pointer blob and return the run blob's path.
+   *
+   * Returns null if the lookup blob does not exist — the signal for a
+   * never-existed run, or for a run created by the previous code (which wrote
+   * no pointer; see the clean-cutover note in the file header).
    */
-  private async removeFromIndex(runId: string): Promise<void> {
-    const indexBlobName = '_index.json';
-    const index = await downloadJson<RunIndex>(this.containerClient, indexBlobName);
-    if (index && index[runId]) {
-      delete index[runId];
-      await uploadJson(this.containerClient, indexBlobName, index);
-    }
+  private async lookupBlobPath(runId: string): Promise<string | null> {
+    const pointer = await downloadJson<{ path: string }>(
+      this.containerClient,
+      this.lookupBlobName(runId),
+    );
+    return pointer?.path ?? null;
+  }
+
+  /**
+   * Delete the per-run lookup pointer blob.
+   *
+   * `deleteBlob` is idempotent (returns false on 404), so a missing pointer
+   * is a no-op.
+   */
+  private async deleteLookup(runId: string): Promise<void> {
+    await deleteBlob(this.containerClient, this.lookupBlobName(runId));
   }
 }

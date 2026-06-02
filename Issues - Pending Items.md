@@ -2,6 +2,18 @@
 
 ## Pending Items
 
+### AZBLOB-RUN-UPDATE-412 — run cancel-vs-finish race surfaces as HTTP 500
+- **Files**: `src/modules/runs/runs.service.ts` (`cancel()` and the background run-lifecycle updates), `src/storage/providers/azure-blob/azure-blob-run-storage.ts` (`update()`)
+- **Description**: `update()` uses ETag `If-Match`, but no caller catches the 412. If a user cancel and the agent's terminal-state write hit the same run within one blob round-trip, the loser throws 412 → HTTP 500 (the cancel "fails" even though the run ended). Surfaced while fixing the run-index race; same unguarded read-modify-write class.
+- **Severity**: Medium
+- **Recommendation**: Bounded retry-on-412 around the read-modify-write (`isConflictError` already exists in `azure-blob-helpers.ts`); on exhaustion re-read and return 409 if the run is already terminal.
+
+### AZBLOB-STORE-PUTITEM-LOSTUPDATE — `AzureBlobStoreStorage.putItem()` is an unguarded read-modify-write
+- **File**: `src/storage/providers/azure-blob/azure-blob-store-storage.ts` (`putItem()`)
+- **Description**: Reads, merges, and writes back with no ETag/lease — the same lost-update shape this work fixes for the run index, on the `/store` API. Concurrent writes to the same `(namespace, key)` clobber each other. Impact depends on whether `/store` is used as a shared multi-writer KV.
+- **Severity**: Medium-Low
+- **Recommendation**: ETag-conditional write with retry-on-412 (single call site).
+
 ### P1 - Repositories use local inline types instead of shared types from types/index.ts
 - **Files**: `src/modules/assistants/assistants.repository.ts`, `src/modules/threads/threads.repository.ts`, `src/modules/runs/runs.repository.ts`, `src/modules/crons/crons.repository.ts`, `src/modules/store/store.repository.ts`
 - **Description**: Each repository defines its own inline interface (e.g., `Assistant`, `Thread`, `Run`, `Cron`, `Item`) with comments saying "will be replaced with the shared type from types/index.ts". The shared types exist in `src/types/index.ts` but are not used by repositories or services. This creates a risk of type drift between the schema-derived types and the inline types.
