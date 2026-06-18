@@ -11,6 +11,14 @@ export interface SearchOptions {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   metadata?: Record<string, unknown>;
+  /**
+   * Canonical `select` field list (ThreadSelectField[]). Threaded through to
+   * storage providers so a provider can decide whether expensive state fields
+   * must be materialized (e.g. azure-blob skips body downloads when only
+   * metadata is requested). The final wire projection is still applied by the
+   * service layer so all providers return an identical row shape. See ADR-0002.
+   */
+  select?: string[];
 }
 
 export interface SearchResult<T> {

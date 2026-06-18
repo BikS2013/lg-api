@@ -17,6 +17,23 @@ export const ThreadSchema = Type.Object({
   interrupts: Type.Optional(Type.Array(InterruptSchema)),
 });
 
+// --- Projected thread row returned by POST /threads/search ---
+// `/threads/search` is a projecting endpoint: `select` controls which fields each
+// row carries (default: full canonical thread incl. `values`/`interrupts`;
+// narrow via select). Only
+// `thread_id` (the resource identity) is guaranteed; every other field is optional
+// so any projection serializes cleanly. Distinct from ThreadSchema (the full
+// entity, where the metadata fields are required). See ADR-0002 / thread-projection.ts.
+export const SearchThreadResultSchema = Type.Object({
+  thread_id: Type.String({ format: 'uuid' }),
+  created_at: Type.Optional(Type.String({ format: 'date-time' })),
+  updated_at: Type.Optional(Type.String({ format: 'date-time' })),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  status: Type.Optional(ThreadStatusEnum),
+  values: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  interrupts: Type.Optional(Type.Array(InterruptSchema)),
+});
+
 // --- Thread Task ---
 export const ThreadTaskSchema = Type.Object({
   id: Type.String({ format: 'uuid' }),
@@ -67,7 +84,11 @@ export const SearchThreadsRequestSchema = Type.Object({
   sort_by: Type.Optional(Type.String()),
   sort_order: Type.Optional(SortOrderEnum),
   select: Type.Optional(Type.Array(Type.String())),
-  extract: Type.Optional(Type.Array(Type.String())),
+  // Canonical LangGraph `extract` is a mapping (output field -> JSONPath), i.e.
+  // dict[str, str] — NOT an array. Match the wire type so a canonical client is
+  // not 400'd, even though lg-api does not yet apply extract (see threads.service
+  // and ADR-0002: accepted-and-deferred).
+  extract: Type.Optional(Type.Record(Type.String(), Type.String())),
 });
 
 // --- Count Threads Request ---

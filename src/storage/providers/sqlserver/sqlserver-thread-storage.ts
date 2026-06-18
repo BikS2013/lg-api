@@ -375,6 +375,19 @@ export class SqlServerThreadStorage implements IThreadStorage {
           i++;
         }
       }
+      // Canonical `values` state filter — pushed into SQL so the page and count
+      // reflect the filtered set (ADR-0002). JSON_VALUE only extracts scalars, so
+      // nested-object value filters are not matched here; document if needed.
+      if (filters.values && typeof filters.values === 'object') {
+        const vals = filters.values as Record<string, unknown>;
+        let i = 0;
+        for (const [key, val] of Object.entries(vals)) {
+          const paramName = `vals_f_${i}`;
+          request.input(paramName, sql.NVarChar(sql.MAX), String(val));
+          whereClauses.push(`JSON_VALUE([values], '$.${this.sanitizeJsonPath(key)}') = @${paramName}`);
+          i++;
+        }
+      }
     }
 
     if (metadataFilters && typeof metadataFilters === 'object') {

@@ -77,8 +77,13 @@ export class InMemoryRepository<T extends Record<string, any>> implements IRepos
   }
 
   /**
-   * Filter items by metadata using shallow matching.
-   * An item matches if every key in the filter exists in item.metadata with the same value.
+   * Filter items by metadata. An item matches if every key in the filter exists
+   * in item.metadata with a deep-equal value.
+   *
+   * Uses deepEqual (not `===`) so an object/array-valued metadata filter behaves
+   * identically on the search path (this method) and the count path
+   * (filterByFields). A prior shallow `===` made count and search disagree for
+   * nested metadata values — same conceptual filter, two implementations.
    */
   protected filterByMetadata(items: T[], metadata: Record<string, unknown>): T[] {
     return items.filter((item) => {
@@ -87,7 +92,7 @@ export class InMemoryRepository<T extends Record<string, any>> implements IRepos
         return false;
       }
       return Object.entries(metadata).every(
-        ([key, value]) => itemMetadata[key] === value
+        ([key, value]) => deepEqual(itemMetadata[key], value)
       );
     });
   }
@@ -95,9 +100,33 @@ export class InMemoryRepository<T extends Record<string, any>> implements IRepos
   /**
    * Filter items by top-level fields using shallow equality.
    */
+  /**
+   * Filter items by top-level fields.
+   *
+   * A primitive filter value is matched with shallow equality on the item's
+   * same-named field (e.g. `status`). An object-valued filter (e.g. a `metadata`
+   * or canonical `values` state filter) is matched per-key against the item's
+   * same-named object field: the item matches when every key in the filter object
+   * is deep-equal to the corresponding key on the item. This keeps the `values`
+   * state filter correct and applied BEFORE pagination (ADR-0002), without
+   * downloading or projecting anything extra.
+   */
   protected filterByFields(items: T[], filters: Record<string, unknown>): T[] {
     return items.filter((item) =>
-      Object.entries(filters).every(([key, value]) => (item as any)[key] === value)
+      Object.entries(filters).every(([key, value]) => {
+        const actual = (item as any)[key];
+        if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          if (actual === null || typeof actual !== 'object') {
+            // An empty object filter matches anything; a non-empty one cannot
+            // match a missing/non-object field.
+            return Object.keys(value as Record<string, unknown>).length === 0;
+          }
+          return Object.entries(value as Record<string, unknown>).every(
+            ([k, v]) => deepEqual((actual as Record<string, unknown>)[k], v),
+          );
+        }
+        return actual === value;
+      }),
     );
   }
 
@@ -117,4 +146,26 @@ export class InMemoryRepository<T extends Record<string, any>> implements IRepos
       return sortOrder === 'asc' ? comparison : -comparison;
     });
   }
+}
+
+/**
+ * Structural deep equality for object-valued filter matching (metadata/values).
+ * Sufficient for JSON-shaped data (primitives, arrays, plain objects).
+ */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || a === undefined || b === undefined) return false;
+  if (typeof a !== 'object' || typeof b !== 'object') return false;
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => deepEqual(item, b[i]));
+  }
+
+  const aObj = a as Record<string, unknown>;
+  const bObj = b as Record<string, unknown>;
+  const aKeys = Object.keys(aObj);
+  const bKeys = Object.keys(bObj);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((k) => deepEqual(aObj[k], bObj[k]));
 }

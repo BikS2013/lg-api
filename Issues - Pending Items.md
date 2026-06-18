@@ -14,6 +14,18 @@
 - **Severity**: Medium-Low
 - **Recommendation**: ETag-conditional write with retry-on-412 (single call site).
 
+### AZBLOB-GETSTATE-LIST-SCAN — `getState()` lists the whole history prefix on every read (O(turns))
+- **Files**: `src/storage/providers/azure-blob/azure-blob-thread-storage.ts` (`getState()`, `addState()`, `getStateHistory()`), called per-turn from `src/modules/runs/runs.service.ts`
+- **Description**: `getState()` enumerates the entire `{threadId}_history/` prefix and sorts names just to find the latest snapshot. Runs read current state every turn, so a thread with T turns does an ~T-blob listing on each read — O(T²) over a conversation. The latest values are also in the thread root blob, but the synthetic `ThreadState` (checkpoint/next/tasks) is only in history. Hurts long-lived threads at scale; independent of total thread count.
+- **Severity**: Medium (High for long conversations / high-volume deployments)
+- **Recommendation**: Maintain a fixed-name `{threadId}_history/_latest.json` holding the latest `ThreadState`; `getState()` reads it directly (O(1)); `addState()` overwrites it; `getStateHistory()` excludes it; legacy threads fall back to the list-and-sort once, then self-heal. Non-breaking (preserves the full `ThreadState`, incl. parent_checkpoint chaining). Do NOT substitute a plain thread-root read — it drops `checkpoint` (breaks `runs.service` parent_checkpoint at the prior-state read) and changes `GET /state` `created_at` semantics.
+
+### AZBLOB-HISTORY-UNBOUNDED — thread state history grows without bound (no retention/pruning)
+- **Files**: `src/storage/providers/azure-blob/azure-blob-thread-storage.ts` (`addState()`)
+- **Description**: `addState()` writes a new `{threadId}_history/{ts}.json` on every state change and nothing ever deletes them. At millions of threads × N turns this is millions×N blobs — drives storage volume and compounds AZBLOB-GETSTATE-LIST-SCAN's per-read cost. No TTL/lifecycle in code.
+- **Severity**: Medium (capacity/cost at scale)
+- **Recommendation**: Add retention — keep the last N snapshots per thread (prune on write), and/or an Azure blob lifecycle policy on the `_history/` prefix, and/or a background prune job. Confirm whether the existing `/threads/prune` endpoint covers the azure-blob backend.
+
 ### P1 - Repositories use local inline types instead of shared types from types/index.ts
 - **Files**: `src/modules/assistants/assistants.repository.ts`, `src/modules/threads/threads.repository.ts`, `src/modules/runs/runs.repository.ts`, `src/modules/crons/crons.repository.ts`, `src/modules/store/store.repository.ts`
 - **Description**: Each repository defines its own inline interface (e.g., `Assistant`, `Thread`, `Run`, `Cron`, `Item`) with comments saying "will be replaced with the shared type from types/index.ts". The shared types exist in `src/types/index.ts` but are not used by repositories or services. This creates a risk of type drift between the schema-derived types and the inline types.
@@ -122,6 +134,55 @@
 - **Recommendation**: When consumers no longer rely on `event: end`, drop the terminator and rely on SSE EOF.
 
 ---
+
+## LangGraph API Gaps (documented divergences — behavior differences, not scheduled fixes)
+
+lg-api is a drop-in for the LangGraph Platform **API surface** backed by an HTTP agent; it persists state snapshots but is **not** a LangGraph graph runtime with a checkpointer. The items below are intentional/structural divergences from the canonical Server API. They are **not** azure-blob-specific (they apply to every backend) and are recorded so consumers know what not to depend on. "Fundamental" = won't change without a real graph runtime; "Addressable" = could be implemented if a consumer needs it.
+
+### GAP-STATE-RUNTIME-FIELDS — `next` / `tasks` empty, `checkpoint` synthetic
+- **Canonical**: `GET /state` returns `next` (nodes scheduled next), `tasks` (pending/interrupted), and a real `checkpoint`/`parent_checkpoint` chain driving execution + time-travel.
+- **lg-api**: `next: []` and `tasks: []` always; `checkpoint`/`parent_checkpoint` are freshly-generated ids, not a real checkpoint tree.
+- **Nature**: Fundamental. Don't drive client logic off `next`/`tasks`.
+
+### GAP-STATE-CHECKPOINT-TRAVEL — `checkpoint_id` ignored on state read
+- **Canonical**: `GET /state?checkpoint_id=…` (and `GET /state/{checkpoint_id}`) returns state *at* that checkpoint; `POST /state` with `checkpoint_id` branches.
+- **lg-api**: `getState()` always returns the latest snapshot; `checkpoint_id` is not honored on read; `POST /state` writes a new latest state, not a real branch. (Missing route also tracked as P8.)
+- **Nature**: Fundamental.
+
+### GAP-THREAD-INTERRUPTS — thread/state `interrupts` never populated
+- **Canonical**: interrupted graphs surface `interrupts` (per task) + `status: "interrupted"`, resumable.
+- **lg-api**: no interrupt mechanism; `interrupts` is effectively always empty; interrupt/resume isn't real. (`/runs/wait` interrupted-status handling tracked as LG-WAIT-INTERRUPT-STATUS.)
+- **Nature**: Fundamental.
+
+### GAP-STATE-SUBGRAPHS — `subgraphs` query param ignored on `GET /state`
+- **Canonical**: `subgraphs=true` includes subgraph states.
+- **lg-api**: `getState(_subgraphs)` ignores it (no subgraph concept).
+- **Nature**: Fundamental.
+
+### GAP-THREAD-CONFIG-CONTEXT — `config` / `context` not modeled on Thread
+- **Canonical**: Thread and `ThreadSelectField` include `config` and `context`.
+- **lg-api**: not modeled → never returned; `select:["config"|"context"]` yields absent fields, and a `select` naming only unknown fields falls back to the full default projection.
+- **Nature**: Addressable (add the fields if needed).
+
+### GAP-HISTORY-BEFORE-SEMANTICS — `/history` `before` is a timestamp, not a checkpoint ref
+- **Canonical**: history `before` is a checkpoint reference; pagination walks the checkpoint tree.
+- **lg-api**: `before` is compared against `created_at` (ISO string); the history `metadata` filter is shallow equality.
+- **Nature**: Addressable.
+
+### GAP-SEARCH-EXTRACT-NOOP — search `extract` accepted but not applied
+- **Canonical**: `extract` (dict of output-field → JSONPath) returns extracted sub-values.
+- **lg-api**: the canonical wire type is accepted (no 400) but extraction is not performed. (See ADR-0002.)
+- **Nature**: Addressable.
+
+### GAP-SEARCH-SORT-STATEUPDATED — `sort_by: state_updated_at` is a no-op
+- **Canonical**: `state_updated_at` is a valid `ThreadSortBy`.
+- **lg-api**: the Thread has no `state_updated_at` field; sorting by it does nothing (the other sort fields work).
+- **Nature**: Addressable (would need to track last-state-update time on the thread).
+
+### GAP-AZBLOB-VALUES-FILTER — azure-blob rejects the `values` state filter (501)
+- **Canonical / other backends**: `POST /threads/search` `values` filters threads by state content.
+- **lg-api (azure-blob only)**: returns 501 — honoring it would require a full-container body scan. memory/sqlite/sqlserver honor it. (See ADR-0002.)
+- **Nature**: Backend-specific, by design.
 
 ---
 
