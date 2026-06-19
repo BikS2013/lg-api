@@ -205,11 +205,16 @@ export async function listBlobsByPrefix(
 }
 
 /**
- * List all blobs matching a prefix, including their tags.
+ * List all blobs matching a prefix, including their tags AND metadata.
+ *
+ * `includeMetadata` is required: callers (thread search/count) reconstruct
+ * metadata-only rows from `blob.metadata` to avoid downloading bodies. Without
+ * it the SDK returns `blob.metadata === undefined` for every blob and the
+ * body-download fallback fires on every row — defeating the whole optimization.
  *
  * @param containerClient - The Azure container client
  * @param prefix - Blob name prefix to match
- * @returns Array of BlobItem objects with tags populated
+ * @returns Array of BlobItem objects with tags and metadata populated
  */
 export async function listBlobsByPrefixWithTags(
   containerClient: ContainerClient,
@@ -219,10 +224,35 @@ export async function listBlobsByPrefixWithTags(
   for await (const blob of containerClient.listBlobsFlat({
     prefix,
     includeTags: true,
+    includeMetadata: true,
   })) {
     blobs.push(blob);
   }
   return blobs;
+}
+
+/**
+ * Map over items with bounded concurrency, preserving input order. Used to cap
+ * the parallel blob-body downloads in the legacy-recovery and page-hydration
+ * paths so they finish in seconds instead of timing out, without firing
+ * hundreds of simultaneous requests at the storage account.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const current = next++;
+      if (current >= items.length) return;
+      results[current] = await fn(items[current], current);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /**

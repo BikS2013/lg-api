@@ -91,18 +91,7 @@ export class SqliteThreadStorage implements IThreadStorage {
 
     // Additional filters
     if (filters) {
-      for (const [key, value] of Object.entries(filters)) {
-        if (key === 'metadata') {
-          const metaFilters = value as Record<string, unknown>;
-          for (const [mKey, mValue] of Object.entries(metaFilters)) {
-            conditions.push(`json_extract(metadata, ?) = ?`);
-            params.push(`$.${mKey}`, typeof mValue === 'string' ? mValue : JSON.stringify(mValue));
-          }
-        } else if (key === 'status') {
-          conditions.push('status = ?');
-          params.push(value);
-        }
-      }
+      this.appendFilterConditions(filters, conditions, params);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -131,24 +120,41 @@ export class SqliteThreadStorage implements IThreadStorage {
     const params: unknown[] = [];
 
     if (filters) {
-      for (const [key, value] of Object.entries(filters)) {
-        if (key === 'metadata') {
-          const metaFilters = value as Record<string, unknown>;
-          for (const [mKey, mValue] of Object.entries(metaFilters)) {
-            conditions.push(`json_extract(metadata, ?) = ?`);
-            params.push(`$.${mKey}`, typeof mValue === 'string' ? mValue : JSON.stringify(mValue));
-          }
-        } else if (key === 'status') {
-          conditions.push('status = ?');
-          params.push(value);
-        }
-      }
+      this.appendFilterConditions(filters, conditions, params);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const stmt = this.db.prepare(`SELECT COUNT(*) as cnt FROM Thread ${whereClause}`);
     const row = stmt.get(...params) as { cnt: number };
     return row.cnt;
+  }
+
+  /**
+   * Translate the shared filter bag into SQL WHERE conditions (pushed into the
+   * query, so LIMIT/OFFSET paginate the filtered set). Supports `status`, the
+   * `metadata` object filter, and the canonical `values` state filter — each
+   * matched with json_extract so the page and count stay consistent (ADR-0002).
+   */
+  private appendFilterConditions(
+    filters: Record<string, unknown>,
+    conditions: string[],
+    params: unknown[],
+  ): void {
+    for (const [key, value] of Object.entries(filters)) {
+      if (key === 'metadata' || key === 'values') {
+        const column = key === 'metadata' ? 'metadata' : '"values"';
+        const objFilter = value as Record<string, unknown>;
+        for (const [fKey, fValue] of Object.entries(objFilter)) {
+          // json_extract returns JSON text for objects/arrays; compare against a
+          // JSON-encoded expectation for non-strings so nested filters work.
+          conditions.push(`json_extract(${column}, ?) = ?`);
+          params.push(`$.${fKey}`, typeof fValue === 'string' ? fValue : JSON.stringify(fValue));
+        }
+      } else if (key === 'status') {
+        conditions.push('status = ?');
+        params.push(value);
+      }
+    }
   }
 
   async getState(threadId: string): Promise<ThreadState | null> {

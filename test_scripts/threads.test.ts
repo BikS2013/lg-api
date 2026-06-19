@@ -210,6 +210,163 @@ describe('Threads API', () => {
         expect(t.status).toBe('idle');
       });
     });
+
+    // Canonical contract: search returns `values` by DEFAULT (agent-chat-ui reads
+    // thread.values.messages from search results with no `select`). Clients that
+    // want a lean listing narrow via `select`.
+    it('returns full rows by default — values included (no select)', async () => {
+      const tag = `default-full-${randomUUID()}`;
+      const { body: created } = await createThread(app, { metadata: { tag } });
+      await app.inject({
+        method: 'POST',
+        url: `/threads/${created.thread_id}/state`,
+        headers: { 'content-type': 'application/json' },
+        payload: { values: { messages: [{ type: 'human', content: 'hi' }], step: 1 } },
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/threads/search',
+        headers: { 'content-type': 'application/json' },
+        payload: { metadata: { tag } }, // no select
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.length).toBe(1);
+      const row = body[0];
+      expect(row).toHaveProperty('thread_id');
+      expect(row).toHaveProperty('metadata');
+      expect(row).toHaveProperty('status');
+      expect(row).toHaveProperty('values');
+      expect(row.values).toMatchObject({ step: 1 });
+    });
+
+    it('narrows to metadata-only when select excludes state', async () => {
+      const tag = `select-narrow-${randomUUID()}`;
+      const { body: created } = await createThread(app, { metadata: { tag } });
+      await app.inject({
+        method: 'POST',
+        url: `/threads/${created.thread_id}/state`,
+        headers: { 'content-type': 'application/json' },
+        payload: { values: { step: 42 } },
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/threads/search',
+        headers: { 'content-type': 'application/json' },
+        payload: { metadata: { tag }, select: ['thread_id', 'metadata', 'status'] },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.length).toBe(1);
+      expect(body[0]).toHaveProperty('thread_id');
+      expect(body[0]).toHaveProperty('metadata');
+      expect(body[0]).not.toHaveProperty('values');
+    });
+
+    // Regression: a select omitting the metadata fields must still SERIALIZE.
+    // The search response schema (SearchThreadResultSchema) makes everything but
+    // thread_id optional; a strict ThreadSchema here 500s with "<field> is
+    // required!" on any projection that drops created_at/updated_at/metadata/status.
+    it('serializes a select that omits metadata fields (only thread_id guaranteed)', async () => {
+      const tag = `select-narrow-${randomUUID()}`;
+      const { body: created } = await createThread(app, { metadata: { tag } });
+      await app.inject({
+        method: 'POST',
+        url: `/threads/${created.thread_id}/state`,
+        headers: { 'content-type': 'application/json' },
+        payload: { values: { step: 7 } },
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/threads/search',
+        headers: { 'content-type': 'application/json' },
+        payload: { metadata: { tag }, select: ['values'] },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.length).toBe(1);
+      expect(body[0]).toHaveProperty('thread_id'); // identity always returned
+      expect(body[0]).toHaveProperty('values');
+      expect(body[0]).not.toHaveProperty('created_at');
+      expect(body[0]).not.toHaveProperty('metadata');
+    });
+
+    it('honors metadata filter, limit, offset, and sort', async () => {
+      const tag = `paging-${randomUUID()}`;
+      // Space creation by >1ms so created_at is strictly increasing and the
+      // sort_by=created_at assertion is deterministic (ISO timestamps are ms).
+      for (let i = 0; i < 3; i++) {
+        await createThread(app, { metadata: { tag, seq: i } });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      const all = await app.inject({
+        method: 'POST',
+        url: '/threads/search',
+        headers: { 'content-type': 'application/json' },
+        payload: { metadata: { tag }, sort_by: 'created_at', sort_order: 'asc' },
+      });
+      expect(all.statusCode).toBe(200);
+      const allBody = JSON.parse(all.body);
+      expect(allBody.length).toBe(3);
+      expect(all.headers['x-pagination-total']).toBe('3');
+
+      const page = await app.inject({
+        method: 'POST',
+        url: '/threads/search',
+        headers: { 'content-type': 'application/json' },
+        payload: {
+          metadata: { tag },
+          sort_by: 'created_at',
+          sort_order: 'asc',
+          limit: 1,
+          offset: 1,
+        },
+      });
+      expect(page.statusCode).toBe(200);
+      const pageBody = JSON.parse(page.body);
+      expect(pageBody.length).toBe(1);
+      // total reflects the full matched set, not the page.
+      expect(page.headers['x-pagination-total']).toBe('3');
+      // The middle row by created_at asc is the second-created thread.
+      expect(pageBody[0].metadata.seq).toBe(1);
+    });
+
+    it('honors the canonical `values` state filter (memory backend)', async () => {
+      const tag = `vfilter-${randomUUID()}`;
+      const { body: a } = await createThread(app, { metadata: { tag } });
+      const { body: b } = await createThread(app, { metadata: { tag } });
+      await app.inject({
+        method: 'POST',
+        url: `/threads/${a.thread_id}/state`,
+        headers: { 'content-type': 'application/json' },
+        payload: { values: { lane: 'fast' } },
+      });
+      await app.inject({
+        method: 'POST',
+        url: `/threads/${b.thread_id}/state`,
+        headers: { 'content-type': 'application/json' },
+        payload: { values: { lane: 'slow' } },
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/threads/search',
+        headers: { 'content-type': 'application/json' },
+        payload: { metadata: { tag }, values: { lane: 'fast' } },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.length).toBe(1);
+      expect(body[0].thread_id).toBe(a.thread_id);
+    });
   });
 
   // -------------------------------------------------------------------------

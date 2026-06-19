@@ -8,6 +8,7 @@ import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { Type } from '@sinclair/typebox';
 import {
   ThreadSchema,
+  SearchThreadResultSchema,
   ThreadStateSchema,
   CreateThreadRequestSchema,
   UpdateThreadRequestSchema,
@@ -146,7 +147,7 @@ In the LangGraph Platform, applications often manage thousands of threads across
 Empty filters return all threads subject to the limit. Large result sets should use pagination to avoid timeouts. Response includes pagination headers.`,
       body: SearchThreadsRequestSchema,
       response: {
-        200: Type.Array(ThreadSchema),
+        200: Type.Array(SearchThreadResultSchema),
       },
     },
     handler: async (request, reply) => {

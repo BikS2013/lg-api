@@ -194,6 +194,28 @@ describe('SQLite Thread Storage', () => {
     expect(result.items[0].status).toBe('busy');
   });
 
+  // ADR-0002: canonical `values` state filter pushed into the query.
+  it('should search threads with a values state filter', async () => {
+    await provider.threads.create(makeThread({ status: 'idle', values: { lane: 'fast' } }));
+    await provider.threads.create(makeThread({ status: 'idle', values: { lane: 'slow' } }));
+
+    const result = await provider.threads.search(
+      { limit: 10, offset: 0 },
+      { values: { lane: 'fast' } },
+    );
+    expect(result.total).toBe(1);
+    expect(result.items[0].values).toMatchObject({ lane: 'fast' });
+  });
+
+  it('should count threads with a values state filter', async () => {
+    await provider.threads.create(makeThread({ values: { lane: 'fast' } }));
+    await provider.threads.create(makeThread({ values: { lane: 'fast' } }));
+    await provider.threads.create(makeThread({ values: { lane: 'slow' } }));
+
+    const count = await provider.threads.count({ values: { lane: 'fast' } });
+    expect(count).toBe(2);
+  });
+
   it('should search threads with pagination', async () => {
     for (let i = 0; i < 5; i++) {
       await provider.threads.create(makeThread());
