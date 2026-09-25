@@ -115,23 +115,54 @@
 - **Severity**: Medium (chat UIs that want to render error state can't)
 - **Recommendation**: On error, still write the run as `status: error`, but return the current `thread.values` (with an appended assistant message describing the error) at the response root, matching the official contract. Stateless runs return whatever partial state the agent produced before failing.
 
-### LG-STREAM-MODE-HONOR — `/runs/stream` ignores the `stream_mode` request field
-- **File**: `src/modules/runs/runs.service.ts` (`streamRun()`)
-- **Description**: The official LangGraph stream emits events according to `stream_mode` (`values`, `updates`, `messages`, `debug`, `tasks`, `checkpoints`, `events` — any subset). lg-api currently emits `metadata` → `values` → `end` regardless. Clients asking for `updates` or token-by-token `messages` get the wrong events.
-- **Severity**: Medium (chat UIs work; SDK clients using non-default modes break)
-- **Recommendation**: Read `request.stream_mode` (already in `RunCreateRequestSchema`) and emit only the requested event types. For `messages` mode, the agent's CLI contract must expose token streaming too — track separately as LG-STREAM-LIVE-EXECUTION.
-
-### LG-STREAM-LIVE-EXECUTION — stream is faked: agent runs to completion before any SSE event is emitted
-- **File**: `src/modules/runs/runs.service.ts` (`streamRun()` lines 605–650 area), `src/agents/cli-connector.ts`, `src/agents/types.ts` (`AgentStreamEvent`)
-- **Description**: `streamRun` currently calls `agentExecutor.execute` (synchronous, returns the full response), then yields one `metadata` + one `values` + one `end` event from the resulting state. The official LangGraph server emits events progressively as the graph executes — one `values` per graph step, one `messages/partial` per LLM token, etc. lg-api's behavior breaks token-by-token chat UIs and any debugger that watches step-by-step state evolution.
-- **Severity**: Medium (only matters once a UI/debugger needs live streaming)
-- **Recommendation**: Define a streaming agent contract (CLI agent emits one JSON event per stdout line — `{event, data}` records — instead of one final blob). Update `CliAgentConnector.streamAgent` to forward each chunk as it arrives. Update `streamRun` to forward agent events directly to the SSE channel, including `messages/partial` for token chunks. Non-trivial design change; deferred.
-
-### LG-STREAM-END-EVENT — `end: null` terminator is non-canonical
-- **File**: `src/modules/runs/runs.service.ts` (`streamRun()` final `yield`)
-- **Description**: lg-api emits an explicit `event: end\ndata: null\n\n` event before closing the SSE stream. The official LangGraph server just closes the connection (SSE EOF). Kept deliberately for back-compat with current consumers (e.g. agent-chat-ui) that listen for the `end` marker. Documenting here so it's not lost.
+### LG-STREAM-END-EVENT — `end: null` terminator is non-canonical (now switchable)
+- **File**: `src/modules/runs/runs.service.ts` (`streamLive()`, `joinStream()`), `src/modules/runs/stream-config.ts`
+- **Description**: lg-api emits an explicit `event: end\ndata: null\n\n` event before closing the SSE stream. The official LangGraph server just closes the connection (SSE EOF). Kept deliberately for back-compat with current consumers (e.g. agent-chat-ui) that listen for the `end` marker.
+- **Status (2026-09-25)**: Partially done. `LG_API_STREAM_END_EVENT` (default `true`, today's behaviour) controls it on `/runs/stream` and on joins of streamed runs; `false` closes the stream like LangGraph. The join of a run that was never streamed (e.g. a background run) always sends `end`, as before.
 - **Severity**: Low (intentional divergence pending consumer migration)
-- **Recommendation**: When consumers no longer rely on `event: end`, drop the terminator and rely on SSE EOF.
+- **Recommendation**: Flip the default to `false` once consumers (e.g. agent-chat-ui) no longer rely on `event: end`.
+
+### LG-STREAM-MULTITASK — `multitask_strategy` stored but not enforced
+- **File**: `src/modules/runs/runs.service.ts` (`streamRun()`, `wait()`, `createStateful()`)
+- **Description**: LangGraph answers `reject` (the default) with 409 when the thread is busy, and supports `interrupt` / `enqueue`. lg-api stores the field but never enforces it, so a double submit or a second tab runs two turns on one thread and both write its state. Streaming makes this easier to hit (a rejoin after reload plus a resend).
+- **Severity**: Medium
+- **Recommendation**: Enforce `reject` (409 while the thread has a pending/running run) behind a flag first, since `/runs/wait` callers may rely on today's permissiveness.
+
+### LG-STREAM-ON-DISCONNECT — `on_disconnect: cancel` on POST …/runs/stream is ignored by design
+- **File**: `src/modules/runs/runs.service.ts` (`streamLive()`)
+- **Description**: A client disconnect only detaches the stream: the run completes and is persisted, so a side-effecting turn (e.g. one that commits an external transaction) is never lost. The `on_disconnect` body field is therefore not honoured, including `cancel`, which `useStream` sends when a stream is not resumable. Explicit cancellation exists: `POST …/runs/:run_id/cancel` aborts the agent call of a live run, and on joins `GET …/runs/:run_id/stream?cancel_on_disconnect=true` aborts it when that joiner leaves. That call is an explicit client opt-in, and the agent may still complete a side effect it had already started.
+- **Severity**: Low
+- **Recommendation**: Keep it as is. If `on_disconnect: cancel` must be honoured, make it cooperative: the agent declares when it is safe to cancel, and side-effecting calls carry idempotency keys.
+
+### LG-STREAM-SINGLE-REPLICA — stream sessions are in memory, per replica
+- **File**: `src/streaming/stream-manager.ts`
+- **Description**: Live fan-out, the 60 s replay buffer and rejoin all live in the lg-api process. A rejoin that lands on another replica, or that arrives after a restart, cannot follow the run: it gets the stored thread state (`metadata` + `values` + `end`). A rollout cuts live streams, but the runs in them still complete and persist.
+- **Severity**: Medium in multi-replica deployments
+- **Recommendation**: Use session affinity, or a shared event bus (e.g. Redis streams) behind StreamManager.
+
+### LG-STREAM-JOIN-NO-SESSION — joining a run that was not streamed returns stored state at once
+- **File**: `src/modules/runs/runs.service.ts` (`joinStream()`)
+- **Description**: Only `/runs/stream` runs have a stream session. Joining a background run (`POST /threads/:id/runs`) while it is still running returns the current stored state immediately, instead of waiting for the run and streaming it as LangGraph does.
+- **Severity**: Low
+- **Recommendation**: If needed, open the SSE response, send heartbeats while polling the run status, and emit the final `values` when it reaches a terminal state.
+
+### LG-STREAM-ERROR-EVENT — on a live stream, agent failures are HTTP 200 + SSE `error`
+- **File**: `src/modules/runs/runs.service.ts` (`streamLive()`)
+- **Description**: The live stream flushes its headers before the agent is called, so an agent failure that the default path reports as HTTP 502 (connection failed / invalid response) or 504 (timeout) arrives as HTTP 200 followed by `event: error` `{error, message}` (LangGraph does the same). A consumer that treats only a non-2xx status as a failure, or reads only `messages` events, sees a failed turn as an empty stream.
+- **Status**: Open — by design, matching LangGraph. `/runs/wait` is unaffected.
+- **Severity**: Medium for `/runs/stream` consumers that ignore `event: error`
+- **Recommendation**: `/runs/stream` consumers must handle `event: error`. Alternative on the lg-api side: hold the headers until the first agent event so pre-first-byte connection and timeout failures still map to 502/504 (costs the "headers + metadata at once" behaviour).
+
+### LG-STREAM-HANDOFF-LIVE-PREFIX — handoff chunk repeats text already streamed live
+- **File**: `src/modules/runs/runs.service.ts` (`typeOut()`)
+- **Description**: The `is_handoff` chunk always carries the FULL message content, because consumers may take that chunk's content as the handoff text. If an agent streamed part of a handoff message live (LLM tokens, not the runner's `final`/`reconcile` token), a consumer that concatenates tuple chunks shows that prefix twice. No current agent streams handoff text live.
+- **Severity**: Low
+- **Recommendation**: Agents should not stream a handoff message live; or send a `replace` before the handoff chunk.
+
+### LG-STREAM-CONFIG-DEFAULTS — documented exception to the "no fallback values" rule
+- **File**: `src/modules/runs/stream-config.ts`
+- **Description**: The `/runs/stream` knobs are optional, with documented defaults: `LG_API_STREAM_HEARTBEAT_MS=5000`, `LG_API_STREAM_END_EVENT=true`, `LG_API_TYPEWRITER=on`, `LG_API_TYPEWRITER_CHUNK_MS=22`, `LG_API_TYPEWRITER_MAX_MS=1400`. Making them required would force every existing deployment, including those that only use `/runs/wait`, to change its environment. An invalid value is never replaced: it throws at server start. No other endpoint reads these variables.
+- **Severity**: n/a (deliberate exception, like P9)
 
 ---
 
@@ -187,6 +218,34 @@ lg-api is a drop-in for the LangGraph Platform **API surface** backed by an HTTP
 ---
 
 ## Completed Items
+
+### LG-STREAM-MODE-HONOR, LG-STREAM-LIVE-EXECUTION — live `/runs/stream`, LangGraph stream API compatible
+- **Date**: 2026-09-25
+- **Files**:
+  - `src/modules/runs/runs.service.ts`: `streamRun()`, new `streamLive()`, `typeOut()`, `agentEvents()`, and `joinStream()`
+  - `src/modules/runs/runs.streaming.ts`: `openSse()`, `joinLive()`, `sendEvents()`, `openLiveResponse()`, `matchesStreamModes()`, `runStreamLocation()`
+  - `src/streaming/stream-manager.ts`: `publish()`, `subscribe()`, and subscriber notification in `closeSession()`
+  - `src/modules/runs/stream-config.ts` (new)
+  - `src/modules/runs/runs.routes.ts`: the join route passes `cancel_on_disconnect`, and the new `GET /runs/:run_id/stream` route
+  - `src/agents/connectors/api-connector.ts` (`streamAgent()`), `src/agents/agent-executor.ts` (`streamAgent()`), `src/agents/types.ts` (`AgentWireEvent`)
+  - `agents/agent-template-ts` (lg-agent-sdk-ts 1.1.0: `runAgentHttpStreaming`)
+  - Tests: `test_scripts/runs-stream-live.test.ts`, `api-connector-ndjson.test.ts`, `sdk-http-streaming-runner.test.ts`, `stream-config.test.ts`
+- **Issue**: `/runs/stream` ran the agent to completion before sending headers. It ignored `stream_mode`, sent only `metadata`/`values`/`end`, had no `Location` header and no heartbeats, and a rejoin replayed the buffer and closed, so a client reloading mid-run thought the run had ended. After the buffer expired, a rejoin returned only `messages`.
+- **Fix**:
+  - **Live stream.** Headers and `metadata {run_id, attempt}` go out at once, followed by an initial `values` (the input state). The agent's NDJSON events are then forwarded as they arrive. The connector asks for NDJSON (`Accept: application/x-ndjson`) only on this path, and legacy JSON agents fall back to a single `final`.
+  - **`stream_mode`.** It may be a string or an array, defaults to `values`, and only the requested modes are emitted:
+    - `messages-tuple`: `[AIMessageChunk, metadata]`, with the metadata filled the way LangGraph does (`langgraph_step`/`_node` (`respond`)/`_triggers`/`_path`/`_checkpoint_ns`, `checkpoint_ns`, `tags`, `run_attempt`, `assistant_id`, `graph_id`, `thread_id`, `run_id`).
+    - `messages`: `messages/metadata`, `messages/partial` (type `AIMessageChunk`), `messages/complete`.
+    - `updates`: keyed `respond`.
+    - `values`: the full final state.
+    - `custom`: the agent's progress payload, unchanged.
+  - **Typed final reply.** State is persisted once, through the same `updateThreadState` as `/runs/wait`, and the run is marked `success` before the reply is typed out. The last chunk carries `additional_kwargs`, and a handoff reply is sent as a single chunk.
+  - **Run lifetime.** It is independent of the client connection: a disconnect only detaches that connection. Only the agent timeout, or an explicit `cancel_on_disconnect` on a join, aborts the run.
+  - **Hardening.** A `: heartbeat` comment is sent every `LG_API_STREAM_HEARTBEAT_MS`. The `Location` header is `/threads/{t}/runs/{r}/stream` (or `/runs/{r}/stream` for stateless runs), and failures after the headers become an SSE `error` event.
+  - **Rejoin.** It follows the live run until the run finishes. It replays from `Last-Event-ID` when one is sent (`-1` replays everything; with none, only new events are sent, as in langgraph-api `Runs.Stream.join` / `restore_messages`). `stream_mode` filters the events. A finished streamed run joined without a `Last-Event-ID` (buffer still held) returns the full stored `values`.
+  - **Always live.** `POST …/runs/stream` (threaded and stateless) is live for every agent: API agents are asked for NDJSON, plain-JSON agents fall back to one `final`, and connectors without `streamAgent` (CLI) run `execute()` then `final`. The join of a thread run without a live session — never streamed (e.g. a background run) or its buffer expired — behaves exactly as before: replay-and-end with a Last-Event-ID over an earlier join's buffer, else `metadata` + `values: {messages}` + `end`, no `Location` header (`joinStoredRun()`).
+  - **Cancellation.** `POST …/runs/:run_id/cancel` (and bulk cancel) also aborts the agent call of a live run, and a run cancelled after its turn was saved stays `interrupted`.
+- **Unchanged**: `/runs/wait`, background runs, cancel of non-streamed runs, the thread/state/history/assistant endpoints, `ApiAgentConnector.execute()`, the CLI connector, and the join of a run that was never streamed. A real-server differential against `main` (same deterministic stub JSON agent) returned identical responses for the wait-side endpoints after id/timestamp masking.
 
 ### LG-WAIT-FLATTEN, LG-WAIT-FULL-STATE, LG-MESSAGE-SCHEMA, LG-STREAM-FLATTEN-VALUES, LG-STREAM-METADATA-PAYLOAD — `/runs/wait` and `/runs/stream` aligned with official LangGraph contract
 - **Date**: 2026-05-27

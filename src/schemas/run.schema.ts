@@ -94,7 +94,9 @@ export const RunIdParamSchema = Type.Object({
 
 // --- Join Stream Querystring ---
 export const JoinStreamQuerySchema = Type.Object({
-  cancel_on_disconnect: Type.Optional(Type.Boolean()),
+  // The LangGraph SDKs' runs.joinStream always sends "0"/"1" here; plain
+  // booleans ("true"/"false") are accepted as before.
+  cancel_on_disconnect: Type.Optional(Type.Union([Type.Boolean(), Type.Literal('0'), Type.Literal('1')])),
   stream_mode: Type.Optional(Type.Array(StreamModeEnum)),
   last_event_id: Type.Optional(Type.String()),
 });
