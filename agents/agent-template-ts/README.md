@@ -48,12 +48,13 @@ npm install lg-agent-sdk
 
 ## Usage
 
-The SDK exposes two runner functions that share the same `AgentHandler` signature:
+The SDK exposes two runner functions that share the same `AgentHandler` signature, plus a streaming variant of the HTTP runner (since 1.1.0):
 
 | Function | Mode | Transport |
 |----------|------|-----------|
 | `runAgent(handler)` | CLI | stdin/stdout JSON |
 | `runAgentHttp(handler, options?)` | HTTP | POST endpoint returning JSON |
+| `runAgentHttpStreaming(handler, options?)` | HTTP | Same endpoint; NDJSON progress stream when lg-api asks for it, otherwise the same JSON as `runAgentHttp` |
 
 ### CLI mode — `runAgent`
 
@@ -152,6 +153,57 @@ my-agent:
 
 The lg-api `ApiAgentConnector` sends a POST with the `AgentRequest` JSON body and expects an `AgentResponse` JSON response.
 
+### Streaming HTTP mode — `runAgentHttpStreaming` (1.1.0+)
+
+Use it when the agent should show progress (status lines) while a turn runs on lg-api `/runs/stream`. The handler gets a second argument, `emit`:
+
+```ts
+import { runAgentHttpStreaming, type AgentEmitter, type AgentRequest, type AgentResponse } from "lg-agent-sdk-ts";
+
+runAgentHttpStreaming(async (request: AgentRequest, emit: AgentEmitter): Promise<AgentResponse> => {
+  emit.progress({ type: "status", text: "Looking up your order…", stage: "validating_step" });
+  const result = await doTheWork(request);            // your agent
+  emit.progress({ type: "status", text: "Preparing the reply…" });
+  return result;                                      // the final AgentResponse, as with runAgentHttp
+});
+```
+
+Registration in `agent-registry.yaml` is the same as for `runAgentHttp` (`type: api`); no extra flag is needed. lg-api's `/runs/stream` is always live and asks every API agent for NDJSON:
+
+```yaml
+  my-agent-http:
+    type: api
+    url: "http://localhost:4000/invoke"
+```
+
+**It is opt-in per request, and the wait path is untouched.**
+
+| lg-api path | Request `Accept` | What the runner sends |
+|-------------|------------------|-----------------------|
+| `/runs/wait`, background runs, older lg-api | not NDJSON | The plain JSON `AgentResponse`, byte for byte what `runAgentHttp` sends. Every `emit` call is a no-op, and `emit.streaming` is `false` |
+| `/runs/stream` | `application/x-ndjson` | `200 application/x-ndjson`. Headers are flushed at once, then one JSON event per line |
+
+The NDJSON events (`AgentWireEvent`):
+
+```text
+{"event":"progress","data":{...}}                     emit.progress(data); lg-api forwards it unchanged as SSE `custom`
+{"event":"token","data":{"id","delta","source"}}      emit.token(delta, source?, id?)
+{"event":"replace","data":{"id","content","reason"}}  emit.replace(content, reason?, id?)
+{"event":"final","data":AgentResponse}                exactly once, last
+{"event":"error","data":{"message"}}                  instead of `final` when the handler throws
+```
+
+When the handler returns, the runner reconciles the reply text for `emit.messageId`:
+- If nothing was streamed, the whole reply goes out as one `token` with `source: "final"`.
+- If the reply extends the streamed text, the missing suffix goes out with `source: "reconcile"`.
+- Otherwise, a `replace` carries the final text.
+
+On this path the runner also stamps `id = emit.messageId` on the reply message, so streamed chunks and the saved message share an id. lg-api types the final reply out word by word itself (`LG_API_TYPEWRITER`), so an agent that only calls `emit.progress` still gets a typed reply.
+
+`emit.signal` is aborted only on the NDJSON path, and only if lg-api drops the upstream connection: on its agent timeout, or on an explicit run cancel. A browser disconnecting never aborts it, because lg-api keeps the run going and saves its result. On the JSON path (`/runs/wait`) it never aborts, so the handler always runs to completion, exactly as under `runAgentHttp`.
+
+`runAgentHttpStreaming` returns the listening `http.Server`, so tests can close it.
+
 ## What it does
 
 ### `runAgent(handler)` — CLI mode
@@ -169,6 +221,10 @@ The lg-api `ApiAgentConnector` sends a POST with the `AgentRequest` JSON body an
 2. On `POST /invoke`: parses the JSON body as `AgentRequest`, validates required fields, calls your `handler`, and returns the `AgentResponse` as JSON (200 on success, 500 on error)
 3. On `GET /health`: returns `{ "status": "ok" }`
 4. Returns 404 for all other routes
+
+### `runAgentHttpStreaming(handler, options?)` — streaming HTTP mode
+
+Same routes, options, validation and error responses as `runAgentHttp`. The one difference: when the request's `Accept` header contains `application/x-ndjson`, it answers with the NDJSON event stream described above instead of one JSON body.
 
 ## Types
 
@@ -203,6 +259,26 @@ interface AgentResponse {
   state?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
+
+// Streaming (1.1.0+)
+type StreamingAgentHandler = (request: AgentRequest, emit: AgentEmitter) => Promise<AgentResponse>;
+
+interface AgentEmitter {
+  readonly streaming: boolean;   // false → every method is a no-op
+  readonly messageId: string;    // id the reply carries on the NDJSON path
+  readonly signal: AbortSignal;  // NDJSON only: aborted when lg-api drops the upstream connection
+  progress(data: Record<string, unknown>): void;
+  token(delta: string, source?: string, id?: string): void;
+  replace(content: string, reason?: string, id?: string): void;
+  streamedText(id?: string): string;
+}
+
+type AgentWireEvent =
+  | { event: "progress"; data: Record<string, unknown> }
+  | { event: "token"; data: { id: string; delta: string; source?: string } }
+  | { event: "replace"; data: { id: string; content: string; reason?: string } }
+  | { event: "final"; data: AgentResponse }
+  | { event: "error"; data: { message: string } };
 ```
 
 ## Protocol contract
