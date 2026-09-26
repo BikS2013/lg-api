@@ -244,6 +244,13 @@ All configuration is via environment variables. **No fallback values** - missing
 | `AZURE_OPENAI_API_KEY` | When using passthrough agent with Azure OpenAI | Azure OpenAI API key |
 | `AZURE_OPENAI_ENDPOINT` | When using passthrough agent with Azure OpenAI | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_DEPLOYMENT` | When using passthrough agent with Azure OpenAI | Azure OpenAI deployment name |
+| `LG_API_STREAM_HEARTBEAT_MS` | No (default `5000`) | `: heartbeat` SSE comment interval on open streams; `0` disables |
+| `LG_API_STREAM_END_EVENT` | No (default `true`) | Send the trailing `event: end`; `false` closes the stream like LangGraph |
+| `LG_API_TYPEWRITER` | No (default `on`) | Type a whole reply out word by word on `messages` / `messages-tuple`; `off` sends one chunk |
+| `LG_API_TYPEWRITER_CHUNK_MS` | No (default `22`) | Delay between typed chunks |
+| `LG_API_TYPEWRITER_MAX_MS` | No (default `1400`) | Cap on the total typing time of one reply |
+
+**Configuration exception (stream knobs):** the five `LG_API_STREAM_*` / `LG_API_TYPEWRITER*` variables have documented defaults instead of being required. They tune only the (always live) `/runs/stream` and the run-stream join endpoints (never `/runs/wait` or background runs), and making them required would force every existing deployment to change its environment. Invalid values still throw at startup. See `src/modules/runs/stream-config.ts` and Issues - Pending Items.md (LG-STREAM-CONFIG-DEFAULTS).
 
 ## Project Structure
 
@@ -273,7 +280,7 @@ src/
   modules/
     assistants/         - 11 endpoints
     threads/            - 12 endpoints
-    runs/               - 14 endpoints (incl. SSE streaming)
+    runs/               - 15 endpoints (incl. SSE streaming + rejoin)
     crons/              - 6 endpoints
     store/              - 5 endpoints
     system/             - 2 endpoints (/ok, /info)

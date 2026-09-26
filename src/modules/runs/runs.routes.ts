@@ -1,5 +1,5 @@
 /**
- * Runs Routes - Fastify plugin registering all 14 run endpoints.
+ * Runs Routes - Fastify plugin registering all 15 run endpoints.
  *
  * Includes CRUD operations, batch creation, streaming (SSE),
  * wait, join, and cancellation routes.
@@ -38,10 +38,19 @@ type RunIdParams = Static<typeof RunIdParamSchema>;
 type ThreadIdParams = Static<typeof ThreadIdParamSchema>;
 type JoinStreamQuery = Static<typeof JoinStreamQuerySchema>;
 
+/** `cancel_on_disconnect` as a boolean: true / "1" cancel, anything else does not. */
+const cancelOnDisconnect = (v: JoinStreamQuery['cancel_on_disconnect']): boolean => v === true || v === '1';
+
 // Combined thread_id param for routes that only need thread_id
 const ThreadIdOnlyParamSchema = Type.Object({
   thread_id: Type.String({ format: 'uuid' }),
 });
+
+// run_id param for stateless-run routes
+const StatelessRunIdParamSchema = Type.Object({
+  run_id: Type.String({ format: 'uuid' }),
+});
+type StatelessRunIdParams = Static<typeof StatelessRunIdParamSchema>;
 
 export default async function registerRunRoutes(fastify: FastifyInstance): Promise<void> {
   const { runs: runsRepository, threads: threadsRepository } = getRepositoryRegistry();
@@ -113,7 +122,7 @@ Key parameters include \`assistant_id\` (required) and \`input\` (required). Sta
 
 In the LangGraph Platform, streaming enables real-time UIs where users see agent progress as it happens. The \`stream_mode\` parameter controls event granularity: **values** emits full state after each node, **messages** emits incremental LLM tokens for typewriter effect, **events** emits lifecycle events, and **debug** emits all internal events.
 
-The connection remains open until the run completes or the client disconnects. Response uses Content-Type \`text/event-stream\` with typed events including \`metadata\`, \`values\`, \`messages/partial\`, \`error\`, and \`end\`.`,
+The connection remains open until the run completes or the client disconnects. A disconnect does not stop the run: it completes, its state is saved, and the stream can be rejoined at the URL in the \`Location\` header (GET …/runs/:run_id/stream). Response uses Content-Type \`text/event-stream\` with typed events including \`metadata\`, \`values\`, \`updates\`, \`messages\` (messages-tuple), \`messages/partial\`, \`custom\`, \`error\`, and \`end\` (see LG_API_STREAM_END_EVENT), plus a \`: heartbeat\` comment while the stream is open.`,
       params: ThreadIdOnlyParamSchema,
       body: RunCreateRequestSchema,
     },
@@ -344,6 +353,8 @@ Subject to HTTP timeout limits. If the run never completes, the join request han
 
 In the LangGraph Platform, SSE streams are resumable. If the run is still executing, events are streamed in real-time. If completed, the final events are sent and the stream closes. If pending, the stream waits until execution begins. The \`stream_mode\` query parameter can override the original stream mode.
 
+In lg-api, a run started with POST …/runs/stream is followed live until it finishes: with a \`Last-Event-ID\` the buffered events after that id are replayed first (\`-1\` replays everything; without one only new events are sent). \`cancel_on_disconnect=true\` cancels the run if this client disconnects first. A streamed run that already finished, joined without a \`Last-Event-ID\`, gets \`metadata\` + the full stored \`values\` (+ \`end\`). A run with no live stream (it was not started with …/runs/stream, e.g. a background run, or it finished more than 60 s ago) is answered from the stored thread state as \`metadata\` + \`values: {messages}\` + \`end\`.
+
 Use cases include reconnecting after network interruption, multiple viewers monitoring the same run, and delayed join where a user navigates away and returns later. Returns 404 if run or thread does not exist.`,
       params: RunIdParamSchema,
       querystring: JoinStreamQuerySchema,
@@ -360,6 +371,40 @@ Use cases include reconnecting after network interruption, multiple viewers moni
       reply,
       streamModes,
       lastEventId,
+      cancelOnDisconnect(request.query.cancel_on_disconnect),
+    );
+    // Do not call reply.send() - response already written via raw
+  });
+
+  // ---------------------------------------------------------------
+  // 13b. GET /runs/:run_id/stream - Join a stateless run's stream (SSE)
+  // ---------------------------------------------------------------
+  fastify.get<{
+    Params: StatelessRunIdParams;
+    Querystring: JoinStreamQuery;
+  }>('/runs/:run_id/stream', {
+    schema: {
+      tags: ['Runs'],
+      summary: 'Join an existing stateless run\'s SSE stream',
+      description: `Connects to the SSE stream of a **stateless** run started with POST /runs/stream — the \`Location\` header of that response points here, so the LangGraph SDKs reconnect to it after a dropped connection.
+
+Same semantics as GET /threads/:thread_id/runs/:run_id/stream: with a \`Last-Event-ID\` header (or \`last_event_id\` query parameter) the buffered events after that id are replayed first (\`-1\` replays everything); the connection then follows the run until it finishes. \`stream_mode\` filters the events; \`cancel_on_disconnect=true\` cancels the run if this client disconnects first. Returns 404 if the run does not exist.`,
+      params: StatelessRunIdParamSchema,
+      querystring: JoinStreamQuerySchema,
+    },
+  }, async (request, reply) => {
+    const { run_id } = request.params;
+    const streamModes = request.query.stream_mode as StreamMode[] | undefined;
+    const lastEventId = request.query.last_event_id
+      ?? request.headers['last-event-id'] as string | undefined;
+
+    await runsService.joinStream(
+      null,
+      run_id,
+      reply,
+      streamModes,
+      lastEventId,
+      cancelOnDisconnect(request.query.cancel_on_disconnect),
     );
     // Do not call reply.send() - response already written via raw
   });

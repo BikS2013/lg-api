@@ -9,7 +9,7 @@
 
 import { AgentRegistry } from './agent-registry.js';
 import { ConnectorFactory } from './connectors/connector-factory.js';
-import type { AgentRequest, AgentResponse, StreamEvent } from './types.js';
+import type { AgentRequest, AgentResponse, AgentWireEvent, StreamEvent } from './types.js';
 import { ApiError } from '../errors/api-error.js';
 
 export class AgentExecutor {
@@ -51,5 +51,30 @@ export class AgentExecutor {
     }
     const connector = this.connectorFactory.getConnector(config);
     yield* connector.stream(config, request);
+  }
+
+  /**
+   * Stream incremental agent events (progress / token / replace) ending in
+   * exactly one `final` carrying the AgentResponse. Connectors that cannot
+   * stream (e.g. CLI agents) are adapted: execute() once, then yield `final`.
+   *
+   * @param signal - explicit cancellation of the run; a client disconnect
+   *                 alone never aborts it
+   */
+  async *streamAgent(
+    graphId: string,
+    request: AgentRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentWireEvent> {
+    const config = this.registry.getAgentConfig(graphId);
+    if (!config) {
+      throw new ApiError(404, `No agent registered for graph_id: ${graphId}`);
+    }
+    const connector = this.connectorFactory.getConnector(config);
+    if (connector.streamAgent) {
+      yield* connector.streamAgent(config, request, signal);
+      return;
+    }
+    yield { event: 'final', data: await connector.execute(config, request) };
   }
 }

@@ -71,9 +71,45 @@ export interface AgentResponse {
  * Maps to SSE event types used by the LangGraph streaming protocol.
  */
 export interface AgentStreamEvent {
-  event: 'metadata' | 'values' | 'messages' | 'end' | 'error';
+  event:
+    | 'metadata'
+    | 'values'
+    | 'updates'
+    | 'messages'
+    | 'messages/partial'
+    | 'messages/complete'
+    | 'messages/metadata'
+    | 'custom'
+    | 'end'
+    | 'error';
   data: unknown;
 }
+
+/**
+ * Incremental events an agent can send over the NDJSON wire (one JSON object
+ * per line, `Content-Type: application/x-ndjson`) before its final
+ * AgentResponse. lg-api maps these onto LangGraph SSE events according to the
+ * run's `stream_mode`. An agent sends NDJSON only when the request carried
+ * `Accept: application/x-ndjson` (the `/runs/stream` path); otherwise it
+ * answers with the plain JSON AgentResponse. Contract:
+ *   - `progress` — opaque progress payload, passed through unchanged as a
+ *                  `custom` event (e.g. `{type: 'status', text}` status lines).
+ *   - `token`    — text delta for the assistant message `id`. The concatenation
+ *                  of all deltas for an id equals the final message content,
+ *                  unless a `replace` for that id follows. `source` 'final'
+ *                  (nothing was streamed live) and 'reconcile' (the missing
+ *                  suffix) mark the runner's reconciliation of the final text.
+ *   - `replace`  — the text streamed so far for `id` is wrong; `content` is
+ *                  the authoritative text so far.
+ *   - `final`    — the complete AgentResponse (exactly once, last).
+ *   - `error`    — agent-side failure after the stream opened.
+ */
+export type AgentWireEvent =
+  | { event: 'progress'; data: Record<string, unknown> }
+  | { event: 'token'; data: { id: string; delta: string; source?: string } }
+  | { event: 'replace'; data: { id: string; content: string; reason?: string } }
+  | { event: 'final'; data: AgentResponse }
+  | { event: 'error'; data: { message: string } };
 
 /**
  * A generic streaming event emitted by any agent connector.
