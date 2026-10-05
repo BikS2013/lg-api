@@ -240,6 +240,7 @@ All configuration is via environment variables. **No fallback values** - missing
 | `LG_API_AUTH_ENABLED` | Yes | Enable/disable API key auth ("true"/"false") |
 | `LG_API_KEY` | When auth enabled | Expected API key value |
 | `STORAGE_CONFIG_PATH` | No | Path to storage-config.yaml (auto-detects at project root if not set) |
+| `LG_API_BODY_LIMIT` | No (default `8388608`, 8 MiB) | Maximum request body size in bytes; an oversized body is rejected with 413 |
 | `AGENT_REGISTRY_PATH` | No | Path to agent-registry.yaml (auto-detects at project root if not set) |
 | `AZURE_OPENAI_API_KEY` | When using passthrough agent with Azure OpenAI | Azure OpenAI API key |
 | `AZURE_OPENAI_ENDPOINT` | When using passthrough agent with Azure OpenAI | Azure OpenAI endpoint URL |

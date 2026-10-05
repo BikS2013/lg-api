@@ -166,6 +166,13 @@
 
 ---
 
+### LG-BODY-LIMIT-DEFAULT — documented exception to the "no fallback values" rule
+- **File**: `src/config/env.config.ts` (`loadBodyLimit()`)
+- **Description**: `LG_API_BODY_LIMIT` (bytes) is optional with a documented default of 8 MiB, replacing Fastify's implicit 1 MiB. Making the variable required would force every existing deployment to change its environment. An invalid value is never replaced: it throws at server start. An oversized body is answered 413 by the error handler (it used to be masked as 500).
+- **Severity**: n/a (deliberate exception, like P9)
+
+---
+
 ## LangGraph API Gaps (documented divergences — behavior differences, not scheduled fixes)
 
 lg-api is a drop-in for the LangGraph Platform **API surface** backed by an HTTP agent; it persists state snapshots but is **not** a LangGraph graph runtime with a checkpointer. The items below are intentional/structural divergences from the canonical Server API. They are **not** azure-blob-specific (they apply to every backend) and are recorded so consumers know what not to depend on. "Fundamental" = won't change without a real graph runtime; "Addressable" = could be implemented if a consumer needs it.
