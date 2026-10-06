@@ -11,7 +11,7 @@
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
-import type { AppConfig } from '../src/config/env.config.js';
+import { DEFAULT_BODY_LIMIT, type AppConfig } from '../src/config/env.config.js';
 import errorHandlerPlugin from '../src/plugins/error-handler.plugin.js';
 
 // Import all schemas with $id that are reused across routes.
@@ -27,6 +27,7 @@ interface TestAppConfig {
   host: string;
   authEnabled: boolean;
   apiKey: string;
+  bodyLimit?: number;
 }
 
 // Collect all schemas that carry $id
@@ -60,7 +61,7 @@ for (const schema of schemasWithId) {
  */
 export async function buildTestApp(config: TestAppConfig): Promise<FastifyInstance> {
   const { buildApp } = await import('../src/app.js');
-  const app = await buildApp(config);
+  const app = await buildApp({ bodyLimit: DEFAULT_BODY_LIMIT, ...config });
   app.log.level = 'error';
   return app;
 }

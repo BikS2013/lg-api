@@ -4,6 +4,32 @@ export interface AppConfig {
   authEnabled: boolean;
   apiKey: string;
   storageConfigPath?: string;
+  bodyLimit: number;
+}
+
+/**
+ * Default maximum request body size: 8 MiB (Fastify's own default is 1 MiB).
+ * Optional with a documented default (a deliberate exception to the
+ * "no fallback values" rule — see Issues - Pending Items.md,
+ * LG-BODY-LIMIT-DEFAULT): making it required would force every existing
+ * deployment to change its environment.
+ */
+export const DEFAULT_BODY_LIMIT = 8 * 1024 * 1024;
+
+/**
+ * LG_API_BODY_LIMIT — integer > 0, in bytes (default 8 MiB). An invalid value
+ * is never silently replaced: it throws at server start.
+ */
+export function loadBodyLimit(env: Record<string, string | undefined> = process.env): number {
+  const raw = env['LG_API_BODY_LIMIT'];
+  if (raw === undefined || raw === '') return DEFAULT_BODY_LIMIT;
+  const value = Number(raw.trim());
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      `Invalid value for LG_API_BODY_LIMIT: "${raw}". Must be an integer > 0 (bytes).`
+    );
+  }
+  return value;
 }
 
 function requireEnv(name: string): string {
@@ -45,11 +71,14 @@ export function loadConfig(): AppConfig {
   // See "Issues - Pending Items.md" P9 for the documented exception.
   const storageConfigPath = process.env['STORAGE_CONFIG_PATH'] || undefined;
 
+  const bodyLimit = loadBodyLimit();
+
   return {
     port,
     host,
     authEnabled,
     apiKey,
     storageConfigPath,
+    bodyLimit,
   };
 }

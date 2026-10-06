@@ -24,6 +24,16 @@ export default fp(
           });
         }
 
+        // Handle Fastify's own client errors (413 body too large, 415
+        // unsupported media type, 400 malformed JSON, ...) with their real
+        // status instead of masking them as 500.
+        const statusCode = fastifyError.statusCode;
+        if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) {
+          return reply.status(statusCode).send({
+            detail: fastifyError.message,
+          });
+        }
+
         // Handle unknown errors
         fastify.log.error(error);
         return reply.status(500).send({

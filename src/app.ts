@@ -26,6 +26,7 @@ declare module 'fastify' {
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const app = Fastify({
     logger: true,
+    bodyLimit: config.bodyLimit,
   }).withTypeProvider<TypeBoxTypeProvider>();
 
   // Decorate with config so plugins can access it
